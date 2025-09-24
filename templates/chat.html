@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ subject_name }} Study Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="chat-container" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
+      <div class="chat-header">
+        <div class="header-content">
+          <a class="back-btn" href="{{ url_for('index') }}">&larr; Back</a>
+          <h1>{{ subject_name }} Study Assistant</h1>
+          <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
+        </div>
+      </div>
+
+      <div id="messages" class="chat-messages">
+        <div class="message bot-message">
+          <div class="message-content">
+            Hi! I'm your {{ subject_name }} assistant. Ask me anything about {{ subject_name }}.
+            I remember the last 4 Q&A pairs for context.
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input-container">
+        <div class="chat-input-wrapper">
+          <input id="questionInput" type="text" placeholder="Ask about {{ subject_name }}..." />
+          <button id="sendBtn" type="button">Send</button>
+        </div>
+        <div id="loading" class="loading-indicator" style="display:none;">Thinking...</div>
+      </div>
+    </div>
+
+    <script>
+      (function() {
+        const container = document.querySelector('.chat-container');
+        const subject = container.getAttribute('data-subject');
+        const subjectName = container.getAttribute('data-subject-name');
+
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('questionInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const loadingEl = document.getElementById('loading');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // Simple random session id that persists per tab
+        let sessionId = sessionStorage.getItem('study_session_id');
+        if (!sessionId) {
+          sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+          sessionStorage.setItem('study_session_id', sessionId);
+        }
+
+        function appendMessage(role, text) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
+          const bubble = document.createElement('div');
+          bubble.className = 'message-content';
+          bubble.textContent = text;
+          wrapper.appendChild(bubble);
+          messagesEl.appendChild(wrapper);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        async function ask(question) {
+          loadingEl.style.display = 'block';
+          sendBtn.disabled = true;
+          inputEl.disabled = true;
+          try {
+            const res = await fetch('{{ url_for("ask_question") }}', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                question: question,
+                subject: subject,
+                session_id: sessionId
+              })
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              appendMessage('bot', data.error || 'Error generating response.');
+              return;
+            }
+            appendMessage('bot', data.answer);
+          } catch (e) {
+            appendMessage('bot', 'Network error: ' + e.message);
+          } finally {
+            loadingEl.style.display = 'none';
+            sendBtn.disabled = false;
+            inputEl.disabled = false;
+            inputEl.focus();
+          }
+        }
+
+        sendBtn.addEventListener('click', () => {
+          const q = inputEl.value.trim();
+          if (!q) return;
+          appendMessage('user', q);
+          inputEl.value = '';
+          ask(q);
+        });
+
+        inputEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendBtn.click();
+          }
+        });
+
+        resetBtn.addEventListener('click', async () => {
+          loadingEl.style.display = 'block';
+          try {
+            const res = await fetch('{{ url_for("reset_conversation") }}', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId })
+            });
+            // Clear UI messages but keep the greeting
+            messagesEl.innerHTML = `
+              <div class="message bot-message">
+                <div class="message-content">
+                  Chat reset. Ask a new question about {{ subject_name }}!
+                </div>
+              </div>`;
+          } catch (e) {
+            appendMessage('bot', 'Reset failed: ' + e.message);
+          } finally {
+            loadingEl.style.display = 'none';
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

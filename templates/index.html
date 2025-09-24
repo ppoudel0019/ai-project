@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Study Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>Study Chatbot</h1>
+        <p>Select a subject to start chatting with your study assistant.</p>
+      </header>
+
+      <section class="subject-grid">
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=math">
+          <div class="subject-icon">📐</div>
+          <h3>Mathematics</h3>
+          <p>Algebra, Calculus, Geometry, Statistics</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=biology">
+          <div class="subject-icon">🧬</div>
+          <h3>Biology</h3>
+          <p>Cell Biology, Genetics, Ecology, Anatomy</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=chemistry">
+          <div class="subject-icon">⚗️</div>
+          <h3>Chemistry</h3>
+          <p>Organic, Inorganic, Physical Chemistry</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=physics">
+          <div class="subject-icon">⚛️</div>
+          <h3>Physics</h3>
+          <p>Mechanics, Thermodynamics, Electromagnetism</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=history">
+          <div class="subject-icon">📚</div>
+          <h3>History</h3>
+          <p>World History, Ancient Civilizations, Modern Era</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=english">
+          <div class="subject-icon">🇺🇸</div>
+          <h3>English Language</h3>
+          <p>Grammar, Literature, Writing, Vocabulary</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=spanish">
+          <div class="subject-icon">🇪🇸</div>
+          <h3>Spanish Language</h3>
+          <p>Grammar, Vocabulary, Conversation, Culture</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=french">
+          <div class="subject-icon">🇫🇷</div>
+          <h3>French Language</h3>
+          <p>Grammar, Vocabulary, Pronunciation, Culture</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=german">
+          <div class="subject-icon">🇩🇪</div>
+          <h3>German Language</h3>
+          <p>Grammar, Vocabulary, Cases, Pronunciation</p>
+        </a>
+
+        <a class="subject-card" href="{{ url_for('chat') }}?subject=chinese">
+          <div class="subject-icon">🇨🇳</div>
+          <h3>Chinese Language</h3>
+          <p>Mandarin, Characters, Pinyin, Culture</p>
+        </a>
+      </section>
+
+      <footer>
+
+      </footer>
+    </div>
+  </body>
+</html>
