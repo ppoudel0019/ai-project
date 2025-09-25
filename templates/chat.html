@@ -13,6 +13,7 @@
           <a class="back-btn" href="{{ url_for('index') }}">&larr; Back</a>
           <h1>{{ subject_name }} Study Assistant</h1>
           <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
+
         </div>
       </div>
 
@@ -30,107 +31,196 @@
           <input id="questionInput" type="text" placeholder="Ask about {{ subject_name }}..." />
           <button id="sendBtn" type="button">Send</button>
         </div>
+
         <div id="loading" class="loading-indicator" style="display:none;">Thinking...</div>
       </div>
     </div>
 
-    <script>
-      (function() {
-        const container = document.querySelector('.chat-container');
-        const subject = container.getAttribute('data-subject');
-        const subjectName = container.getAttribute('data-subject-name');
+   <script>
+(function() {
+  const container = document.querySelector('.chat-container');
+  const subject = container.getAttribute('data-subject');
+  const subjectName = container.getAttribute('data-subject-name');
 
-        const messagesEl = document.getElementById('messages');
-        const inputEl = document.getElementById('questionInput');
-        const sendBtn = document.getElementById('sendBtn');
-        const loadingEl = document.getElementById('loading');
-        const resetBtn = document.getElementById('resetBtn');
+  const messagesEl = document.getElementById('messages');
+  const inputEl = document.getElementById('questionInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const loadingEl = document.getElementById('loading');
+  const resetBtn = document.getElementById('resetBtn');
 
-        // Simple random session id that persists per tab
-        let sessionId = sessionStorage.getItem('study_session_id');
-        if (!sessionId) {
-          sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-          sessionStorage.setItem('study_session_id', sessionId);
-        }
+  // OPTIONAL: if you keep a bottom verify button, give it an id
+  const bottomVerifyBtn = document.getElementById('verifyBtn'); // if you add it
 
-        function appendMessage(role, text) {
-          const wrapper = document.createElement('div');
-          wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
-          const bubble = document.createElement('div');
-          bubble.className = 'message-content';
-          bubble.textContent = text;
-          wrapper.appendChild(bubble);
-          messagesEl.appendChild(wrapper);
-          messagesEl.scrollTop = messagesEl.scrollHeight;
-        }
+  // Stable per-tab session id
+  let sessionId = sessionStorage.getItem('study_session_id');
+  if (!sessionId) {
+    sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('study_session_id', sessionId);
+  }
 
-        async function ask(question) {
-          loadingEl.style.display = 'block';
-          sendBtn.disabled = true;
-          inputEl.disabled = true;
-          try {
-            const res = await fetch('{{ url_for("ask_question") }}', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                question: question,
-                subject: subject,
-                session_id: sessionId
-              })
-            });
-            const data = await res.json();
-            if (!res.ok) {
-              appendMessage('bot', data.error || 'Error generating response.');
-              return;
-            }
-            appendMessage('bot', data.answer);
-          } catch (e) {
-            appendMessage('bot', 'Network error: ' + e.message);
-          } finally {
-            loadingEl.style.display = 'none';
-            sendBtn.disabled = false;
-            inputEl.disabled = false;
-            inputEl.focus();
-          }
-        }
+  // ----- UI helpers -----
+  function appendMessage(role, text) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
 
-        sendBtn.addEventListener('click', () => {
-          const q = inputEl.value.trim();
-          if (!q) return;
-          appendMessage('user', q);
-          inputEl.value = '';
-          ask(q);
-        });
+    const bubble = document.createElement('div');
+    bubble.className = 'message-content';
+    bubble.textContent = text;
+    wrapper.appendChild(bubble);
 
-        inputEl.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendBtn.click();
-          }
-        });
+    // If it's a bot message, add per-message Verify
+    if (role === 'bot') {
+      const toolsRow = document.createElement('div');
+      toolsRow.className = 'message-tools';
 
-        resetBtn.addEventListener('click', async () => {
-          loadingEl.style.display = 'block';
-          try {
-            const res = await fetch('{{ url_for("reset_conversation") }}', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ session_id: sessionId })
-            });
-            // Clear UI messages but keep the greeting
-            messagesEl.innerHTML = `
-              <div class="message bot-message">
-                <div class="message-content">
-                  Chat reset. Ask a new question about {{ subject_name }}!
-                </div>
-              </div>`;
-          } catch (e) {
-            appendMessage('bot', 'Reset failed: ' + e.message);
-          } finally {
-            loadingEl.style.display = 'none';
-          }
-        });
-      })();
-    </script>
+      const verifyBtn = document.createElement('button');
+      verifyBtn.type = 'button';
+      verifyBtn.className = 'verify-btn';
+      verifyBtn.textContent = 'Verify';
+      verifyBtn.addEventListener('click', () => {
+        window.verifyInfo(verifyBtn, wrapper); // verify this specific answer
+      });
+
+      toolsRow.appendChild(verifyBtn);
+      wrapper.appendChild(toolsRow);
+    }
+
+    messagesEl.appendChild(wrapper);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return wrapper; // return for chaining if needed
+  }
+
+  function appendSourcesUnder(wrapperEl, sourcesText) {
+    const existing = wrapperEl.querySelector('.verify-sources');
+    if (existing) existing.remove();
+
+    const block = document.createElement('div');
+    block.className = 'verify-sources';
+    block.innerText = sourcesText || 'No sources found.';
+    wrapperEl.appendChild(block);
+
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ----- Network actions -----
+  window.ask = async function ask(question) {
+    loadingEl.style.display = 'block';
+    sendBtn.disabled = true;
+    inputEl.disabled = true;
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: question,
+          subject: subject,
+          session_id: sessionId
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        appendMessage('bot', data.error || 'Error generating response.');
+        return;
+      }
+      appendMessage('bot', data.answer);
+    } catch (e) {
+      appendMessage('bot', 'Network error: ' + e.message);
+    } finally {
+      loadingEl.style.display = 'none';
+      sendBtn.disabled = false;
+      inputEl.disabled = false;
+      inputEl.focus();
+    }
+  };
+
+  // Verify specific message (per-message button)
+  window.verifyInfo = async function verifyInfo(targetBtn, messageWrapper) {
+    // optimistic placeholder
+    const prev = messageWrapper.querySelector('.verify-sources');
+    if (prev) prev.remove();
+    const temp = document.createElement('div');
+    temp.className = 'verify-sources verifying';
+    temp.innerText = 'Verifying…';
+    messageWrapper.appendChild(temp);
+
+    if (targetBtn) {
+      targetBtn.disabled = true;
+      targetBtn.dataset.originalText = targetBtn.textContent;
+      targetBtn.textContent = 'Verifying…';
+    }
+
+    try {
+      const res = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, subject })
+      });
+      const data = await res.json();
+      const reply = (data && (data.reply || data.answer)) || 'No sources found.';
+      appendSourcesUnder(messageWrapper, reply);
+    } catch (e) {
+      appendSourcesUnder(messageWrapper, 'Verify failed: ' + e.message);
+    } finally {
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.textContent = targetBtn.dataset.originalText || 'Verify';
+      }
+    }
+  };
+
+  // ----- Events -----
+  sendBtn.addEventListener('click', () => {
+    const q = inputEl.value.trim();
+    if (!q) return;
+    appendMessage('user', q);
+    inputEl.value = '';
+    ask(q);
+  });
+
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendBtn.click();
+    }
+  });
+
+  // Bottom verify button (OPTIONAL): verifies the latest bot message
+  if (bottomVerifyBtn) {
+    bottomVerifyBtn.addEventListener('click', () => {
+      // find the last bot message wrapper
+      const wrappers = [...messagesEl.querySelectorAll('.message.bot-message')];
+      const lastBot = wrappers[wrappers.length - 1];
+      if (!lastBot) {
+        appendMessage('bot', 'No bot answer to verify yet.');
+        return;
+      }
+      // call verify for that answer
+      window.verifyInfo(bottomVerifyBtn, lastBot);
+    });
+  }
+
+  resetBtn.addEventListener('click', async () => {
+    loadingEl.style.display = 'block';
+    try {
+      await fetch('{{ url_for("reset_conversation") }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      messagesEl.innerHTML = `
+        <div class="message bot-message">
+          <div class="message-content">
+            Chat reset. Ask a new question about {{ subject_name }}!
+          </div>
+        </div>`;
+    } catch (e) {
+      appendMessage('bot', 'Reset failed: ' + e.message);
+    } finally {
+      loadingEl.style.display = 'none';
+    }
+  });
+})();
+</script>
+
   </body>
 </html>

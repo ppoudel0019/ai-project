@@ -270,3 +270,13 @@ footer {
 .chat-messages::-webkit-scrollbar-thumb:hover {
     background: #a8a8a8;
 }
+
+
+
+.message-tools{display:flex;justify-content:flex-end;gap:8px;margin-top:6px}
+.verify-btn{font-size:.8rem;padding:3px 8px;border:none;border-radius:4px;background:#ffa726;color:#fff;cursor:pointer}
+.verify-btn:disabled{opacity:.7;cursor:default}
+.verify-btn:hover:not(:disabled){background:#fb8c00}
+.verify-sources{margin-top:8px;padding:8px;border-left:3px solid #ffa726;background:#fff7ed;border-radius:4px;white-space:pre-wrap;font-size:.9rem}
+.verify-sources.verifying{opacity:.85;font-style:italic}
+
