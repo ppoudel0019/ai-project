@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Review Flashcards</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    .toolbar{max-width:800px;margin:1rem auto;display:flex;gap:12px;justify-content:space-between;align-items:center;color:#fff}
+    .btn{border:none;border-radius:8px;padding:.55rem .9rem;cursor:pointer}
+    .ghost{background:#fff;border:1px solid #ddd}
+    .danger{background:#ef5350;color:#fff}
+    .muted{opacity:.75;font-size:.9rem}
+
+    .review{max-width:800px;margin:10vh auto;background:#fff;padding:2rem;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.12);text-align:center}
+    .row{display:flex;gap:8px;justify-content:center;margin-top:1rem}
+    .again{background:#ef5350;color:#fff}
+    .hard{background:#ff9800;color:#fff}
+    .good{background:#42a5f5;color:#fff}
+    .easy{background:#66bb6a;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="container">
+
+    <!-- Top toolbar -->
+    <div class="toolbar">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <a class="ghost btn" href="{{ url_for('chat.subjects') }}">Subjects</a>
+        <a class="ghost btn" href="{{ url_for('flashcards.list_cards', subject=subject) }}">Manage Flashcards</a>
+        <a class="ghost btn" href="{{ url_for('flashcards.review_queue', subject=subject) }}">Review</a>
+        <a class="ghost btn" href="{{ url_for('flashcards.review_queue', subject=subject, replay=1) }}">Replay</a>
+      </div>
+
+      <form id="filterForm" method="get" action="{{ url_for('flashcards.review_queue') }}" style="display:flex;gap:8px;align-items:center;">
+        <label class="muted" for="subj">Subject:</label>
+        <select id="subj" name="subject" onchange="this.form.submit()">
+          <option value="">All subjects</option>
+          {% for s in subjects %}
+            <option value="{{ s }}" {{ 'selected' if subject==s else '' }}>{{ s|capitalize }}</option>
+          {% endfor %}
+        </select>
+        <label style="display:flex;gap:6px;align-items:center;">
+          <input id="replayChk" type="checkbox" name="replay" value="1" onchange="this.form.submit()" {{ 'checked' if replay else '' }}>
+          <span class="muted">Replay</span>
+        </label>
+      </form>
+    </div>
+
+    <!-- Review panel -->
+    <div class="review" data-subject="{{ subject }}" data-replay="{{ '1' if replay else '' }}">
+      <div id="reviewCard">
+        {% if card %}
+          <div class="muted" style="text-transform:uppercase;font-size:.8rem;letter-spacing:.04em;margin-bottom:.25rem">
+            {{ (card.subject or 'general')|capitalize }}
+          </div>
+          <h3>Question</h3>
+          <p>{{ card.front }}</p>
+
+          <details style="margin:1rem 0">
+            <summary>Show Answer</summary>
+            <div style="margin-top:.5rem">{{ card.back }}</div>
+          </details>
+
+          <div class="row">
+            <button class="btn again" onclick="grade({{ card.id }}, 1)">Again</button>
+            <button class="btn hard"  onclick="grade({{ card.id }}, 2)">Hard</button>
+            <button class="btn good"  onclick="grade({{ card.id }}, 4)">Good</button>
+            <button class="btn easy"  onclick="grade({{ card.id }}, 5)">Easy</button>
+          </div>
+
+          <div class="row" style="margin-top:1rem">
+            <button class="btn danger" onclick="deleteCard({{ card.id }})">Delete Flashcard</button>
+          </div>
+        {% else %}
+          <h3>{% if replay %}No flashcards found for replay{% else %}Nothing due 🎉{% endif %}</h3>
+          <p>Try switching subjects or
+            {% if replay %}
+              <a href="{{ url_for('flashcards.list_cards', subject=subject) }}">manage flashcards</a>
+            {% else %}
+              <a href="{{ url_for('flashcards.review_queue', subject=subject, replay=1) }}">start Replay</a>
+            {% endif %}.
+          </p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const container = document.querySelector('.review');
+    const subject = container.getAttribute('data-subject') || '';
+    const replay  = container.getAttribute('data-replay') ? 1 : 0;
+    const reviewCard = document.getElementById('reviewCard');
+
+    function escapeHtml(s){return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+
+    function renderNoCard(){
+      reviewCard.innerHTML = `
+        <h3>${replay ? 'No flashcards found for replay' : 'Nothing due 🎉'}</h3>
+        <p>Try switching subjects or ${
+          replay
+            ? '<a href="{{ url_for('flashcards.list_cards') }}?subject='+encodeURIComponent(subject)+'">manage flashcards</a>'
+            : '<a href="{{ url_for('flashcards.review_queue') }}?subject='+encodeURIComponent(subject)+'&replay=1">start Replay</a>'
+        }.</p>`;
+    }
+
+    function renderCard(card){
+      reviewCard.innerHTML = `
+        <div class="muted" style="text-transform:uppercase;font-size:.8rem;letter-spacing:.04em;margin-bottom:.25rem">
+          ${(card.subject||'general').charAt(0).toUpperCase() + (card.subject||'general').slice(1)}
+        </div>
+        <h3>Question</h3>
+        <p>${escapeHtml(card.front)}</p>
+
+        <details style="margin:1rem 0">
+          <summary>Show Answer</summary>
+          <div style="margin-top:.5rem">${escapeHtml(card.back)}</div>
+        </details>
+
+        <div class="row">
+          <button class="btn again" onclick="grade(${card.id}, 1)">Again</button>
+          <button class="btn hard"  onclick="grade(${card.id}, 2)">Hard</button>
+          <button class="btn good"  onclick="grade(${card.id}, 4)">Good</button>
+          <button class="btn easy"  onclick="grade(${card.id}, 5)">Easy</button>
+        </div>
+        <div class="row" style="margin-top:1rem">
+          <button class="btn danger" onclick="deleteCard(${card.id})">Delete Flashcard</button>
+        </div>`;
+    }
+
+    async function fetchNext(){
+      const url = new URL('{{ url_for("flashcards.review_queue") }}', window.location.origin);
+      if(subject) url.searchParams.set('subject', subject);
+      if(replay)  url.searchParams.set('replay', '1');
+      url.searchParams.set('partial', '1');
+
+      const r = await fetch(url.toString());
+      const data = await r.json();
+      if(data.has_card && data.card) renderCard(data.card);
+      else renderNoCard();
+    }
+
+    async function grade(card_id, quality){
+      const r = await fetch('{{ url_for("flashcards.grade_card") }}', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({card_id, quality, subject, replay})
+      });
+      if(r.ok) await fetchNext(); else alert('Failed to grade flashcard');
+    }
+
+    async function deleteCard(card_id){
+      if(!confirm('Delete this flashcard?')) return;
+      const r = await fetch('{{ url_for("flashcards.delete_card") }}', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({card_id, subject, replay})
+      });
+      if(r.ok) await fetchNext(); else alert('Failed to delete flashcard');
+    }
+  </script>
+</body>
+</html>

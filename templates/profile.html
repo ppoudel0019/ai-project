@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+  <title>My Profile</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    .card{max-width:800px;margin:2rem auto;background:#fff;padding:1.5rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.08)}
+    .row{display:grid;grid-template-columns:1fr 2fr;gap:12px;align-items:center;margin:.5rem 0}
+    input, textarea, select{width:100%;padding:.6rem;border:1px solid #e0e0e0;border-radius:8px}
+    .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:1rem}
+    .btn{border:none;border-radius:8px;padding:.6rem 1rem;cursor:pointer}
+    .primary{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff}
+    .danger{background:#ef5350;color:#fff}
+    .headerbar{display:flex;justify-content:space-between;align-items:center;color:#fff;margin:1rem 0}
+    .flash{color:#333;background:#fff3cd;border-left:4px solid #ffec99;padding:.6rem;border-radius:8px;margin:.5rem 0}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="headerbar">
+      <div><h1>My Profile</h1></div>
+      <div>
+        <a style="color:#fff" href="{{ url_for('chat.subjects') }}">Subjects</a>
+        &nbsp;|&nbsp;
+        <a style="color:#fff" href="{{ url_for('auth.logout') }}">Logout</a>
+      </div>
+    </header>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <h2>Account</h2>
+      <form method="post" action="{{ url_for('profile.update_profile') }}">
+        <div class="row"><label>Email</label><div><input value="{{ user.email }}" disabled></div></div>
+        <div class="row"><label>Name</label><div><input name="name" value="{{ user.name or '' }}" maxlength="100"></div></div>
+        <div class="row"><label>Timezone</label>
+          <div>
+            <select name="timezone">
+              {% for tz in ['America/Chicago','America/New_York','America/Los_Angeles','UTC'] %}
+                <option value="{{ tz }}" {{ 'selected' if user.timezone==tz else '' }}>{{ tz }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="row"><label>Favorite subject</label>
+          <div>
+            <select name="favorite_subject">
+              {% for s in ['math','biology','chemistry','physics','history','english','spanish','french','german','chinese'] %}
+                <option value="{{ s }}" {{ 'selected' if user.favorite_subject==s else '' }}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="row"><label>Bio</label><div><textarea name="bio" rows="4">{{ user.bio or '' }}</textarea></div></div>
+        <div class="actions"><button class="btn primary" type="submit">Save Profile</button></div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Change Password</h2>
+      <form method="post" action="{{ url_for('profile.change_password') }}">
+        <div class="row"><label>Current password</label><div><input name="current_password" type="password" required></div></div>
+        <div class="row"><label>New password</label><div><input name="new_password" type="password" required></div></div>
+        <div class="row"><label>Confirm new password</label><div><input name="confirm_password" type="password" required></div></div>
+        <div class="actions"><button class="btn danger" type="submit">Update Password</button></div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

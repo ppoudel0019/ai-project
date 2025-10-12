@@ -8,100 +8,77 @@
   </head>
   <body>
     <div class="container">
-    <header>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <h1>Study Chatbot</h1>
-          <p>Select a subject to start chatting with your study assistant.</p>
+      <header>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <h1>Study Chatbot</h1>
+            <p>Select a subject to start chatting with your study assistant.</p>
+          </div>
+
+          {% if current_user.is_authenticated %}
+            <div>
+              <span style="color:white;">Hi, {{ current_user.name or current_user.email }}!</span>
+              <a style="color:white;margin-left:1rem;" href="{{ url_for('profile.view_profile') }}">My Profile</a>
+              <a style="color:white;margin-left:1rem;" href="{{ url_for('flashcards.list_cards') }}">Flashcards</a>
+              <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.logout') }}">Logout</a>
+            </div>
+          {% elif session.get('guest') %}
+            <div>
+              <span style="color:white;">Guest</span>
+              <a style="color:white;margin-left:1rem;" href="{{ url_for('chat.guest_end') }}">End guest</a>
+              <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.login') }}">Login</a>
+            </div>
+          {% else %}
+            <div>
+              <a style="color:white;margin-right:1rem;" href="{{ url_for('auth.login') }}">Login</a>
+              <a style="color:white;" href="{{ url_for('auth.register') }}">Register</a>
+            </div>
+          {% endif %}
         </div>
-
-        {% if current_user.is_authenticated %}
-          <div>
-            <span style="color:white;">Hi, {{ current_user.name or current_user.email }}!</span>
-
-            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.logout') }}">Logout</a>
-          </div>
-        {% elif session.get('guest') %}
-          <div>
-            <span style="color:white;">Guest</span>
-            <a style="color:white;margin-left:1rem;" href="{{ url_for('chat.guest_end') }}">End Guest Session</a>
-            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.login') }}">Login</a>
-            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.register') }}">Register</a>
-          </div>
-        {% else %}
-          <div>
-            <a style="color:white;margin-right:1rem;" href="{{ url_for('auth.login') }}">Login</a>
-            <a style="color:white;" href="{{ url_for('auth.register') }}">Register</a>
-          </div>
-        {% endif %}
-      </div>
-    </header>
+      </header>
 
       <section class="subject-grid">
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=math">
-          <div class="subject-icon">📐</div>
-          <h3>Mathematics</h3>
+          <div class="subject-icon">📐</div><h3>Mathematics</h3>
           <p>Algebra, Calculus, Geometry, Statistics</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=biology">
-          <div class="subject-icon">🧬</div>
-          <h3>Biology</h3>
+          <div class="subject-icon">🧬</div><h3>Biology</h3>
           <p>Cell Biology, Genetics, Ecology, Anatomy</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=chemistry">
-          <div class="subject-icon">⚗️</div>
-          <h3>Chemistry</h3>
+          <div class="subject-icon">⚗️</div><h3>Chemistry</h3>
           <p>Organic, Inorganic, Physical Chemistry</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=physics">
-          <div class="subject-icon">⚛️</div>
-          <h3>Physics</h3>
+          <div class="subject-icon">⚛️</div><h3>Physics</h3>
           <p>Mechanics, Thermodynamics, Electromagnetism</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=history">
-          <div class="subject-icon">📚</div>
-          <h3>History</h3>
+          <div class="subject-icon">📚</div><h3>History</h3>
           <p>World History, Ancient Civilizations, Modern Era</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=english">
-          <div class="subject-icon">🇺🇸</div>
-          <h3>English Language</h3>
+          <div class="subject-icon">🇺🇸</div><h3>English Language</h3>
           <p>Grammar, Literature, Writing, Vocabulary</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=spanish">
-          <div class="subject-icon">🇪🇸</div>
-          <h3>Spanish Language</h3>
+          <div class="subject-icon">🇪🇸</div><h3>Spanish Language</h3>
           <p>Grammar, Vocabulary, Conversation, Culture</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=french">
-          <div class="subject-icon">🇫🇷</div>
-          <h3>French Language</h3>
+          <div class="subject-icon">🇫🇷</div><h3>French Language</h3>
           <p>Grammar, Vocabulary, Pronunciation, Culture</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=german">
-          <div class="subject-icon">🇩🇪</div>
-          <h3>German Language</h3>
+          <div class="subject-icon">🇩🇪</div><h3>German Language</h3>
           <p>Grammar, Vocabulary, Cases, Pronunciation</p>
         </a>
-
         <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=chinese">
-          <div class="subject-icon">🇨🇳</div>
-          <h3>Chinese Language</h3>
+          <div class="subject-icon">🇨🇳</div><h3>Chinese Language</h3>
           <p>Mandarin, Characters, Pinyin, Culture</p>
         </a>
       </section>
-
-      <footer>
-
-      </footer>
     </div>
   </body>
 </html>

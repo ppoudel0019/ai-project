@@ -1,10 +1,6 @@
-from flask import Blueprint, request, jsonify, session
-import google.generativeai as genai
+from flask import Blueprint, request, jsonify
 import os
-
-from flask_login import current_user
-
-from models.subject import SUBJECTS
+import google.generativeai as genai
 
 ai_bp = Blueprint("ai", __name__)
 
@@ -15,16 +11,25 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 conversations = {}
 
+SUBJECTS = {
+    'math': 'Mathematics',
+    'biology': 'Biology',
+    'chemistry': 'Chemistry',
+    'physics': 'Physics',
+    'history': 'History',
+    'english': 'English Language',
+    'spanish': 'Spanish Language',
+    'french': 'French Language',
+    'german': 'German Language',
+    'chinese': 'Chinese Language'
+}
 
 def build_gemini_model(system_prompt: str):
-    is_guest = session.get("guest") and not getattr(current_user, "is_authenticated", False)
-    max_tokens = 100 if is_guest else 500
     return genai.GenerativeModel(
         model_name="gemini-2.0-flash-lite",
         system_instruction=system_prompt,
-        generation_config={"temperature": 0.7, "max_output_tokens": max_tokens},
+        generation_config={"temperature": 0.7, "max_output_tokens": 500},
     )
-
 
 def to_gemini_history(history):
     converted = []
@@ -39,20 +44,20 @@ def to_gemini_history(history):
         })
     return converted
 
-
-@ai_bp.route("/api/ask", methods=["POST"])
+@ai_bp.post("/api/ask")
 def ask_question():
-    data = request.get_json()
-    question = data.get("question", "")
-    subject = data.get("subject", "math")
-    session_id = data.get("session_id", "default")
+    data = request.get_json() or {}
+    question = data.get('question', '')
+    subject = data.get('subject', 'math')
+    session_id = data.get('session_id', 'default')
 
     if not question.strip():
-        return jsonify({"error": "Question cannot be empty"}), 400
+        return jsonify({'error': 'Question cannot be empty'}), 400
     if subject not in SUBJECTS:
-        subject = "math"
+        subject = 'math'
 
-    history = conversations.setdefault(session_id, [])[-8:]
+    history = conversations.setdefault(session_id, [])
+    history_slice = history[-8:] if len(history) > 8 else history
 
     try:
         system_prompt = (
@@ -61,18 +66,18 @@ def ask_question():
             f"Focus only on {SUBJECTS[subject]} topics."
         )
         model = build_gemini_model(system_prompt)
-        chat = model.start_chat(history=to_gemini_history(history))
+        chat = model.start_chat(history=to_gemini_history(history_slice))
         gemini_response = chat.send_message(question)
         answer = (gemini_response.text or "").strip()
 
-        conversations[session_id].append({"role": "user", "content": question})
-        conversations[session_id].append({"role": "assistant", "content": answer})
-        conversations[session_id] = conversations[session_id][-8:]
+        history.append({"role": "user", "content": question})
+        history.append({"role": "assistant", "content": answer})
+        if len(history) > 8:
+            conversations[session_id] = history[-8:]
 
-        return jsonify({"answer": answer, "question": question, "subject": subject})
+        return jsonify({'answer': answer, 'question': question, 'subject': subject})
     except Exception as e:
-        return jsonify({"error": f"Error generating response: {str(e)}"}), 500
-
+        return jsonify({'error': f'Error generating response: {str(e)}'}), 500
 
 @ai_bp.post("/api/verify")
 def api_verify():
@@ -81,25 +86,24 @@ def api_verify():
     subject = data.get("subject", "math")
     if subject not in SUBJECTS:
         subject = "math"
+
     history = conversations.get(session_id, [])
     if not history:
         return jsonify({"reply": "No previous Q&A available to verify."}), 200
 
-    last_user_q = next(
-        (m["content"] for m in reversed(history) if m.get("role") == "user"), None
-    )
+    last_user_q = next((m["content"] for m in reversed(history) if m.get("role") == "user"), None)
     if not last_user_q:
         return jsonify({"reply": "Couldn't find the last user question to verify."}), 200
 
     try:
         system_prompt = (
             f"You are a study assistant for {SUBJECTS[subject]}. "
-            f"When asked to verify, respond with 3–6 reputable sources that support an answer "
-            f"to the given question. Prefer URLs. If you are uncertain, say so."
+            f"When asked to verify, respond with 3–6 reputable sources (books, papers, .edu/.gov/.org, or high quality sites) "
+            f"that support an answer to the given question. Prefer URLs. If you are uncertain, say so."
         )
         model = build_gemini_model(system_prompt)
         prompt = (
-            "Provide sources that support a correct answer to this question. "
+            "Provide sources that support a clear, correct answer to this question. "
             "Return a short bulleted list of sources with titles and URLs.\n\n"
             f"Question: {last_user_q}"
         )
@@ -108,7 +112,6 @@ def api_verify():
         return jsonify({"reply": sources_text}), 200
     except Exception as e:
         return jsonify({"reply": f"Error while verifying: {e}"}), 500
-
 
 @ai_bp.post("/reset-conversation")
 def reset_conversation():
