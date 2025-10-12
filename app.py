@@ -42,7 +42,7 @@ def build_gemini_model(system_prompt: str):
     Gemini 1.5 supports a system instruction at model construction time.
     """
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.0-flash-lite",
         system_instruction=system_prompt,
         generation_config={
             "temperature": 0.7,
@@ -139,6 +139,7 @@ def ask_question():
     except Exception as e:
         return jsonify({'error': f'Error generating response: {str(e)}'}), 500
 
+
 @app.post("/api/verify")
 def api_verify():
     """
@@ -192,6 +193,7 @@ def api_verify():
     except Exception as e:
         return jsonify({"reply": f"Error while verifying: {e}"}), 500
 
+
 @app.post("/reset-conversation", endpoint="reset_conversation")
 def reset_conversation():
     """
@@ -207,7 +209,5 @@ def reset_conversation():
     return jsonify({"ok": True, "cleared_session_id": session_id})
 
 
-
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5001)
-
+    app.run(debug=True, host='0.0.0.0', port=5002)
