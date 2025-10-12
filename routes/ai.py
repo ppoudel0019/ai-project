@@ -1,5 +1,5 @@
-from flask import Blueprint, request, jsonify
-import os
+from flask import Blueprint, request, jsonify, Response
+import os, io, datetime
 import google.generativeai as genai
 
 ai_bp = Blueprint("ai", __name__)
@@ -24,12 +24,14 @@ SUBJECTS = {
     'chinese': 'Chinese Language'
 }
 
+
 def build_gemini_model(system_prompt: str):
     return genai.GenerativeModel(
         model_name="gemini-2.0-flash-lite",
         system_instruction=system_prompt,
         generation_config={"temperature": 0.7, "max_output_tokens": 500},
     )
+
 
 def to_gemini_history(history):
     converted = []
@@ -43,6 +45,7 @@ def to_gemini_history(history):
             "parts": [content],
         })
     return converted
+
 
 @ai_bp.post("/api/ask")
 def ask_question():
@@ -79,6 +82,7 @@ def ask_question():
     except Exception as e:
         return jsonify({'error': f'Error generating response: {str(e)}'}), 500
 
+
 @ai_bp.post("/api/verify")
 def api_verify():
     data = request.get_json(silent=True) or {}
@@ -113,9 +117,107 @@ def api_verify():
     except Exception as e:
         return jsonify({"reply": f"Error while verifying: {e}"}), 500
 
+
 @ai_bp.post("/reset-conversation")
 def reset_conversation():
     data = request.get_json(silent=True) or {}
     session_id = (data.get("session_id") or "default").strip()
     conversations.pop(session_id, None)
     return jsonify({"ok": True, "cleared_session_id": session_id})
+
+
+def recent_history_md(session_id: str):
+    """Return last ~8 messages as Markdown."""
+    hist = conversations.get(session_id, [])
+    lines = []
+    for m in hist:
+        role = m.get("role", "user")
+        content = (m.get("content") or "").strip()
+        if not content: continue
+        prefix = "**You:**" if role == "user" else "**Assistant:**"
+        lines.append(f"{prefix} {content}")
+    return "\n\n".join(lines)
+
+
+@ai_bp.post("/api/summary")
+def summary_chat():
+    data = request.get_json() or {}
+    session_id = data.get("session_id", "default")
+    subject = data.get("subject", "math")
+    history = conversations.get(session_id, [])
+    text_context = "\n\n".join([f"{m['role']}: {m['content']}" for m in history if m.get('content')])
+
+    try:
+        system_prompt = (
+            f"You are a study assistant for {SUBJECTS.get(subject, subject)}. "
+            "Summarize the conversation into 5-9 bullet points, highlighting steps, formulas, and definitions. "
+            "Then list 8-15 key terms with brief one-line definitions. Use concise Markdown."
+        )
+        model = build_gemini_model(system_prompt)
+        resp = model.generate_content(
+            f"Conversation:\n{text_context}\n\nNow produce:\n- Summary bullets\n- Key terms (term — 1 line)")
+        out = (getattr(resp, "text", None) or "").strip()
+        # Split best-effort into two parts
+        parts = out.split("Key", 1)
+        summary = out if len(parts) == 1 else parts[0].strip()
+        key_terms = "" if len(parts) == 1 else "Key" + parts[1]
+        return jsonify({"summary": summary, "key_terms": key_terms})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.post("/api/quiz")
+def quiz_chat():
+    data = request.get_json() or {}
+    session_id = data.get("session_id", "default")
+    subject = data.get("subject", "math")
+    n = int(data.get("num_questions", 5))
+    history = conversations.get(session_id, [])
+    text_context = "\n\n".join([f"{m['role']}: {m['content']}" for m in history if m.get('content')])
+
+    try:
+        system_prompt = (
+            f"You are a quiz generator for {SUBJECTS.get(subject, subject)}. "
+            f"Create {n} multiple-choice questions from the conversation (recent topics only). "
+            "Format in Markdown as:\n\n"
+            "### Q1\n"
+            "A) ...\nB) ...\nC) ...\nD) ...\n\n**Answer:** C — short rationale\n\n"
+            "Keep questions clear and leveled from easy to challenging."
+        )
+        model = build_gemini_model(system_prompt)
+        resp = model.generate_content(f"Conversation:\n{text_context}\n\nGenerate the quiz now.")
+        quiz_md = (getattr(resp, "text", None) or "").strip()
+        return jsonify({"quiz_markdown": quiz_md})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@ai_bp.get("/api/export")
+def export_chat():
+    session_id = request.args.get("session_id", "default")
+    subject = request.args.get("subject", "math")
+    history_md = recent_history_md(session_id)
+
+    # quick inline summary to include
+    try:
+        system_prompt = (
+            f"You are a study assistant for {SUBJECTS.get(subject, subject)}. "
+            "Write a short executive summary (6–10 bullets) of the conversation. Use Markdown."
+        )
+        model = build_gemini_model(system_prompt)
+        resp = model.generate_content(f"Conversation:\n{history_md}")
+        summary_md = (getattr(resp, "text", None) or "").strip()
+    except Exception:
+        summary_md = "_Summary unavailable._"
+
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M%SZ")
+    filename = f"chat_export_{subject}_{now}.md"
+    md = f"# Study Chat Export — {subject}\n\n## Summary\n\n{summary_md}\n\n---\n\n## Conversation\n\n{history_md}\n"
+    buf = io.BytesIO(md.encode("utf-8"))
+    return Response(
+        buf.getvalue(),
+        headers={
+            "Content-Type": "text/markdown; charset=utf-8",
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )

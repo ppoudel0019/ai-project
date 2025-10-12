@@ -5,19 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ subject_name }} Study Assistant</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+    <!-- Minimal page-local styles for the side bar + drawer -->
+    <style>
+      .chat-container{position:relative}
+      .chat-header .header-content{display:flex;align-items:center;justify-content:space-between}
+      .back-btn{color:#fff;cursor:pointer}
+      .reset-btn{border:none;border-radius:10px;padding:.55rem .9rem;cursor:pointer;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff}
+
+      /* Side button bar */
+      .chat-side{
+        position:absolute; right:-72px; top:84px;
+        display:flex; flex-direction:column; gap:10px;
+      }
+      .side-btn{
+        background:#fff; border:1px solid #e8e8e8; border-radius:12px;
+        padding:.6rem .8rem; width:64px; cursor:pointer;
+        box-shadow:0 4px 12px rgba(0,0,0,.08); font-size:.8rem;
+      }
+      .side-btn:hover{background:#f8f8ff}
+
+      /* Drawer */
+      .drawer{position:fixed; inset:0; background:rgba(0,0,0,.28); display:none; align-items:flex-end; justify-content:flex-end; z-index:50}
+      .drawer.open{display:flex}
+      .drawer-panel{
+        width:min(520px, 92vw); height:100vh; background:#fff; padding:16px 18px; overflow:auto;
+        box-shadow:-10px 0 30px rgba(0,0,0,.25);
+      }
+      .drawer-panel h3{margin:.25rem 0 1rem}
+      .drawer-close{float:right; border:none; background:transparent; font-size:1.2rem; cursor:pointer}
+      .muted{opacity:.75}
+      .codeblock{white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; background:#f7f7fb; padding:.75rem; border-radius:8px; border:1px solid #eee}
+
+      /* Messages (assumes your styles.css already has these; keep as fallback) */
+      .message{margin:10px 0}
+      .message-tools{display:flex; gap:8px; margin:6px 0 0}
+    </style>
   </head>
+
   <body>
     <div class="chat-container" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
       <div class="chat-header">
         <div class="header-content">
           <a class="back-btn" onclick="window.location.href='{{ url_for('chat.subjects') }}'">&larr; Back</a>
           <h1>{{ subject_name }} Study Assistant</h1>
-          <div>
+          <div style="display:flex;gap:8px;align-items:center;">
             <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
             <a class="reset-btn" href="{{ url_for('flashcards.review_queue', subject=subject) }}">Flashcards</a>
           </div>
         </div>
       </div>
+
+      <!-- SIDE BUTTON BAR -->
+      <aside class="chat-side">
+        <button id="summaryBtn" class="side-btn" title="Summarize chat">📝 Summary</button>
+        <button id="quizBtn" class="side-btn" title="Quiz me">🧪 Quiz</button>
+        <button id="exportBtn" class="side-btn" title="Export chat + summary">⬇️ Export</button>
+      </aside>
 
       <div id="messages" class="chat-messages">
         <div class="message bot-message">
@@ -37,27 +81,48 @@
       </div>
     </div>
 
+    <!-- Drawer for Summary / Quiz -->
+    <div id="drawer" class="drawer" aria-hidden="true">
+      <div class="drawer-panel">
+        <button id="drawerClose" class="drawer-close" title="Close">✕</button>
+        <div id="drawerContent"></div>
+      </div>
+    </div>
+
 <script>
+  // ensure back-button reload (no cached protected pages)
   window.addEventListener('pageshow', function (e) { if (e.persisted) window.location.reload(); });
+
 (function() {
-  const container = document.querySelector('.chat-container');
-  const subject = container.getAttribute('data-subject');
+  const container   = document.querySelector('.chat-container');
+  const subject     = container.getAttribute('data-subject');
   const subjectName = container.getAttribute('data-subject-name');
 
-  const messagesEl = document.getElementById('messages');
-  const inputEl = document.getElementById('questionInput');
-  const sendBtn = document.getElementById('sendBtn');
-  const loadingEl = document.getElementById('loading');
-  const resetBtn = document.getElementById('resetBtn');
+  const messagesEl  = document.getElementById('messages');
+  const inputEl     = document.getElementById('questionInput');
+  const sendBtn     = document.getElementById('sendBtn');
+  const loadingEl   = document.getElementById('loading');
+  const resetBtn    = document.getElementById('resetBtn');
 
+  // side bar & drawer
+  const summaryBtn    = document.getElementById('summaryBtn');
+  const quizBtn       = document.getElementById('quizBtn');
+  const exportBtn     = document.getElementById('exportBtn');
+  const drawer        = document.getElementById('drawer');
+  const drawerContent = document.getElementById('drawerContent');
+  const drawerClose   = document.getElementById('drawerClose');
+
+  // guest flag for flashcards
   const IS_GUEST = {{ 'true' if (session.get('guest') and not current_user.is_authenticated) else 'false' }};
 
+  // Stable per-tab session id
   let sessionId = sessionStorage.getItem('study_session_id');
   if (!sessionId) {
     sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
     sessionStorage.setItem('study_session_id', sessionId);
   }
 
+  // ----- UI helpers -----
   function appendMessage(role, text) {
     const wrapper = document.createElement('div');
     wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
@@ -71,6 +136,7 @@
       const toolsRow = document.createElement('div');
       toolsRow.className = 'message-tools';
 
+      // Verify this answer
       const verifyBtn = document.createElement('button');
       verifyBtn.type = 'button';
       verifyBtn.className = 'verify-btn';
@@ -78,6 +144,7 @@
       verifyBtn.addEventListener('click', () => { window.verifyInfo(verifyBtn, wrapper); });
       toolsRow.appendChild(verifyBtn);
 
+      // Make flashcard from this answer (uses selection as Answer if present)
       const flashBtn = document.createElement('button');
       flashBtn.type = 'button';
       flashBtn.className = 'verify-btn';
@@ -86,8 +153,8 @@
         let sel = '';
         const selection = window.getSelection && window.getSelection();
         if (selection && selection.rangeCount > 0) sel = selection.toString().trim();
-        const back = sel || text;
-        const front = prompt('Front (question/prompt)?', 'Summarize the key idea');
+        const back = sel || text; // Answer side
+        const front = prompt('Question (front of flashcard)?', 'Summarize the key idea');
         if (!front) return;
         await saveFlashcard(front, back);
       });
@@ -127,6 +194,21 @@
     }
   }
 
+  // Drawer helpers
+  function openDrawer(html){
+    drawerContent.innerHTML = html;
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden','false');
+  }
+  function closeDrawer(){
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden','true');
+    drawerContent.innerHTML = '';
+  }
+  drawer.addEventListener('click', (e)=>{ if(e.target===drawer) closeDrawer(); });
+  drawerClose.addEventListener('click', closeDrawer);
+
+  // ----- Network actions -----
   window.ask = async function ask(question) {
     loadingEl.style.display = 'block';
     sendBtn.disabled = true; inputEl.disabled = true;
@@ -161,10 +243,14 @@
       const data = await res.json();
       const reply = (data && (data.reply || data.answer)) || 'No sources found.';
       appendSourcesUnder(messageWrapper, reply);
-    } catch (e) { appendSourcesUnder(messageWrapper, 'Verify failed: ' + e.message); }
-    finally { if (targetBtn) { targetBtn.disabled = false; targetBtn.textContent = targetBtn.dataset.originalText || 'Verify'; } }
+    } catch (e) {
+      appendSourcesUnder(messageWrapper, 'Verify failed: ' + e.message);
+    } finally {
+      if (targetBtn) { targetBtn.disabled = false; targetBtn.textContent = targetBtn.dataset.originalText || 'Verify'; }
+    }
   };
 
+  // ----- Events -----
   sendBtn.addEventListener('click', () => {
     const q = inputEl.value.trim(); if (!q) return;
     appendMessage('user', q); inputEl.value = ''; ask(q);
@@ -183,12 +269,70 @@
         body: JSON.stringify({ session_id: sessionId })
       });
       messagesEl.innerHTML = `
-        <div class="message bot-message"><div class="message-content">
-          Chat reset. Ask a new question about {{ subject_name }}!
-        </div></div>`;
-    } catch (e) { appendMessage('bot', 'Reset failed: ' + e.message); }
-    finally { loadingEl.style.display = 'none'; }
+        <div class="message bot-message">
+          <div class="message-content">
+            Chat reset. Ask a new question about {{ subject_name }}!
+          </div>
+        </div>`;
+    } catch (e) {
+      appendMessage('bot', 'Reset failed: ' + e.message);
+    } finally {
+      loadingEl.style.display = 'none';
+    }
   });
+
+  // ----- Side bar actions -----
+  // Summary
+  summaryBtn.addEventListener('click', async ()=>{
+    openDrawer('<h3>Summary</h3><div class="muted">Generating…</div>');
+    try{
+      const r = await fetch('{{ url_for("ai.summary_chat") }}', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ session_id: sessionId, subject })
+      });
+      const data = await r.json();
+      const html = `
+        <h3>Summary</h3>
+        <div class="codeblock">${(data.summary||'').replace(/</g,'&lt;')}</div>
+        ${data.key_terms ? `<h4>Key terms</h4><div class="codeblock">${data.key_terms.replace(/</g,'&lt;')}</div>`:''}
+      `;
+      openDrawer(html);
+    }catch(e){
+      openDrawer('<h3>Summary</h3><div class="muted">Failed: '+e.message+'</div>');
+    }
+  });
+
+  // Quiz
+  quizBtn.addEventListener('click', async ()=>{
+    openDrawer('<h3>Quiz</h3><div class="muted">Creating questions…</div>');
+    try{
+      const r = await fetch('{{ url_for("ai.quiz_chat") }}', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ session_id: sessionId, subject, num_questions: 5 })
+      });
+      const data = await r.json();
+      const quizMd = data.quiz_markdown || 'No quiz generated.';
+      const html = `
+        <h3>Quiz</h3>
+        <div class="codeblock">${quizMd.replace(/</g,'&lt;')}</div>
+        <p class="muted">Tip: copy these into your notes or export the chat for a saved copy.</p>
+      `;
+      openDrawer(html);
+    }catch(e){
+      openDrawer('<h3>Quiz</h3><div class="muted">Failed: '+e.message+'</div>');
+    }
+  });
+
+  // Export (downloads .md with summary + chat)
+  exportBtn.addEventListener('click', ()=>{
+    const url = new URL('{{ url_for("ai.export_chat") }}', window.location.origin);
+    url.searchParams.set('session_id', sessionId);
+    url.searchParams.set('subject', subject);
+    window.location = url.toString(); // triggers download
+  });
+
 })();
 </script>
   </body>
