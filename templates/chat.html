@@ -10,7 +10,7 @@
     <div class="chat-container" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
       <div class="chat-header">
         <div class="header-content">
-          <a class="back-btn" href="{{ url_for('index') }}">&larr; Back</a>
+          <a class="back-btn" href="{{ url_for('chat.index') }}">&larr; Back</a>
           <h1>{{ subject_name }} Study Assistant</h1>
           <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
 
@@ -202,7 +202,7 @@
   resetBtn.addEventListener('click', async () => {
     loadingEl.style.display = 'block';
     try {
-      await fetch('{{ url_for("reset_conversation") }}', {
+      await fetch('{{ url_for("ai.reset_conversation") }}', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId })

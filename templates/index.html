@@ -8,67 +8,83 @@
   </head>
   <body>
     <div class="container">
-      <header>
-        <h1>Study Chatbot</h1>
-        <p>Select a subject to start chatting with your study assistant.</p>
-      </header>
+    <header>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <h1>Study Chatbot</h1>
+          <p>Select a subject to start chatting with your study assistant.</p>
+        </div>
+
+        {% if current_user.is_authenticated %}
+          <div>
+            <span style="color:white;">Hi, {{ current_user.name or current_user.email }}!</span>
+            <a href="{{ url_for('auth.logout') }}" style="color:white;margin-left:1rem;">Logout</a>
+          </div>
+        {% else %}
+          <div>
+            <a href="{{ url_for('auth.login') }}" style="color:white;margin-right:1rem;">Login</a>
+            <a href="{{ url_for('auth.register') }}" style="color:white;">Register</a>
+          </div>
+        {% endif %}
+      </div>
+    </header>
 
       <section class="subject-grid">
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=math">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=math">
           <div class="subject-icon">📐</div>
           <h3>Mathematics</h3>
           <p>Algebra, Calculus, Geometry, Statistics</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=biology">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=biology">
           <div class="subject-icon">🧬</div>
           <h3>Biology</h3>
           <p>Cell Biology, Genetics, Ecology, Anatomy</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=chemistry">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=chemistry">
           <div class="subject-icon">⚗️</div>
           <h3>Chemistry</h3>
           <p>Organic, Inorganic, Physical Chemistry</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=physics">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=physics">
           <div class="subject-icon">⚛️</div>
           <h3>Physics</h3>
           <p>Mechanics, Thermodynamics, Electromagnetism</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=history">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=history">
           <div class="subject-icon">📚</div>
           <h3>History</h3>
           <p>World History, Ancient Civilizations, Modern Era</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=english">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=english">
           <div class="subject-icon">🇺🇸</div>
           <h3>English Language</h3>
           <p>Grammar, Literature, Writing, Vocabulary</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=spanish">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=spanish">
           <div class="subject-icon">🇪🇸</div>
           <h3>Spanish Language</h3>
           <p>Grammar, Vocabulary, Conversation, Culture</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=french">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=french">
           <div class="subject-icon">🇫🇷</div>
           <h3>French Language</h3>
           <p>Grammar, Vocabulary, Pronunciation, Culture</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=german">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=german">
           <div class="subject-icon">🇩🇪</div>
           <h3>German Language</h3>
           <p>Grammar, Vocabulary, Cases, Pronunciation</p>
         </a>
 
-        <a class="subject-card" href="{{ url_for('chat') }}?subject=chinese">
+        <a class="subject-card" href="{{ url_for('chat.chat') }}?subject=chinese">
           <div class="subject-icon">🇨🇳</div>
           <h3>Chinese Language</h3>
           <p>Mandarin, Characters, Pinyin, Culture</p>
