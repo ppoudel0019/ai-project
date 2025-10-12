@@ -1,26 +1,28 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, session
 import google.generativeai as genai
 import os
+
+from flask_login import current_user
 
 from models.subject import SUBJECTS
 
 ai_bp = Blueprint("ai", __name__)
 
-# --- Gemini setup ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("Missing GEMINI_API_KEY or GOOGLE_API_KEY in environment.")
 genai.configure(api_key=GEMINI_API_KEY)
 
-# in-memory chat history
 conversations = {}
 
 
 def build_gemini_model(system_prompt: str):
+    is_guest = session.get("guest") and not getattr(current_user, "is_authenticated", False)
+    max_tokens = 100 if is_guest else 500
     return genai.GenerativeModel(
         model_name="gemini-2.0-flash-lite",
         system_instruction=system_prompt,
-        generation_config={"temperature": 0.7, "max_output_tokens": 500},
+        generation_config={"temperature": 0.7, "max_output_tokens": max_tokens},
     )
 
 

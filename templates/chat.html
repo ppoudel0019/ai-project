@@ -10,7 +10,7 @@
     <div class="chat-container" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
       <div class="chat-header">
         <div class="header-content">
-          <a class="back-btn" href="{{ url_for('chat.index') }}">&larr; Back</a>
+          <a class="back-btn" onclick="window.location.href='{{ url_for('chat.subjects') }}'">&larr; Back</a>
           <h1>{{ subject_name }} Study Assistant</h1>
           <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
 
@@ -37,6 +37,9 @@
     </div>
 
    <script>
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) window.location.reload();
+  });
 (function() {
   const container = document.querySelector('.chat-container');
   const subject = container.getAttribute('data-subject');

@@ -21,7 +21,7 @@ def register():
         db.session.add(user)
         db.session.commit()
         login_user(user)
-        return redirect(url_for("chat.index"))
+        return redirect(url_for("chat.landing"))
     return render_template("register.html")
 
 
@@ -33,7 +33,7 @@ def login():
         user = User.query.filter_by(email=email).first()
         if user and bcrypt.check_password_hash(user.password, pw):
             login_user(user)
-            return redirect(url_for("chat.index"))
+            return redirect(url_for("chat.landing"))
         flash("Invalid email or password")
         return redirect(url_for("auth.login"))
     return render_template("login.html")
@@ -43,4 +43,4 @@ def login():
 @login_required
 def logout():
     logout_user()
-    return redirect(url_for("auth.login"))
+    return redirect(url_for("chat.landing"))

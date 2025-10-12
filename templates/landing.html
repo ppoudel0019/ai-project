@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Study Chatbot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <style>
+    .hero{max-width:700px;margin:10vh auto;background:#fff;padding:2rem;border-radius:16px;
+      box-shadow:0 8px 30px rgba(0,0,0,.12);text-align:center}
+    .cta{display:flex;gap:12px;justify-content:center;margin-top:1rem;flex-wrap:wrap}
+    .btn{border:none;padding:.8rem 1.1rem;border-radius:10px;cursor:pointer;font-weight:600}
+    .primary{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff}
+    .ghost{background:#fff;border:1px solid #ddd}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <h1>Welcome to Study Chatbot</h1>
+      <p>Personal AI tutor for Math, Science, Languages and more.</p>
+      <div class="cta">
+        <a class="btn primary" href="{{ url_for('auth.login') }}">Login</a>
+        <a class="btn ghost" href="{{ url_for('auth.register') }}">Register</a>
+        <form method="post" action="{{ url_for('chat.guest_start') }}" style="display:inline">
+          <button class="btn ghost" type="submit">Continue as Guest</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

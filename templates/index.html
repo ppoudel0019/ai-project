@@ -18,12 +18,20 @@
         {% if current_user.is_authenticated %}
           <div>
             <span style="color:white;">Hi, {{ current_user.name or current_user.email }}!</span>
-            <a href="{{ url_for('auth.logout') }}" style="color:white;margin-left:1rem;">Logout</a>
+
+            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.logout') }}">Logout</a>
+          </div>
+        {% elif session.get('guest') %}
+          <div>
+            <span style="color:white;">Guest</span>
+            <a style="color:white;margin-left:1rem;" href="{{ url_for('chat.guest_end') }}">End Guest Session</a>
+            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.login') }}">Login</a>
+            <a style="color:white;margin-left:1rem;" href="{{ url_for('auth.register') }}">Register</a>
           </div>
         {% else %}
           <div>
-            <a href="{{ url_for('auth.login') }}" style="color:white;margin-right:1rem;">Login</a>
-            <a href="{{ url_for('auth.register') }}" style="color:white;">Register</a>
+            <a style="color:white;margin-right:1rem;" href="{{ url_for('auth.login') }}">Login</a>
+            <a style="color:white;" href="{{ url_for('auth.register') }}">Register</a>
           </div>
         {% endif %}
       </div>
