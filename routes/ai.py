@@ -1,6 +1,9 @@
+import logging
+
 from flask import Blueprint, request, jsonify, Response
 import os, io, datetime
 import google.generativeai as genai
+import json
 
 ai_bp = Blueprint("ai", __name__)
 
@@ -10,6 +13,7 @@ if not GEMINI_API_KEY:
 genai.configure(api_key=GEMINI_API_KEY)
 
 conversations = {}
+logger = logging.getLogger(__name__)
 
 SUBJECTS = {
     'math': 'Mathematics',
@@ -80,6 +84,7 @@ def ask_question():
 
         return jsonify({'answer': answer, 'question': question, 'subject': subject})
     except Exception as e:
+        logging.exception("Unable to ask question")
         return jsonify({'error': f'Error generating response: {str(e)}'}), 500
 
 
@@ -115,6 +120,7 @@ def api_verify():
         sources_text = (getattr(resp, "text", None) or "").strip() or "No sources found."
         return jsonify({"reply": sources_text}), 200
     except Exception as e:
+        logging.exception("Unable to verify question")
         return jsonify({"reply": f"Error while verifying: {e}"}), 500
 
 
@@ -163,6 +169,7 @@ def summary_chat():
         key_terms = "" if len(parts) == 1 else "Key" + parts[1]
         return jsonify({"summary": summary, "key_terms": key_terms})
     except Exception as e:
+        logging.exception("Unable to get summary")
         return jsonify({"error": str(e)}), 500
 
 
@@ -189,6 +196,7 @@ def quiz_chat():
         quiz_md = (getattr(resp, "text", None) or "").strip()
         return jsonify({"quiz_markdown": quiz_md})
     except Exception as e:
+        logging.exception("Unable to post quiz")
         return jsonify({"error": str(e)}), 500
 
 
@@ -208,6 +216,7 @@ def export_chat():
         resp = model.generate_content(f"Conversation:\n{history_md}")
         summary_md = (getattr(resp, "text", None) or "").strip()
     except Exception:
+        logging.exception("Unable to export")
         summary_md = "_Summary unavailable._"
 
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d_%H%M%SZ")
@@ -221,3 +230,46 @@ def export_chat():
             "Content-Disposition": f'attachment; filename="{filename}"'
         }
     )
+
+
+@ai_bp.post("/api/quiz_json")
+def quiz_json():
+    data = request.get_json() or {}
+    session_id = data.get("session_id", "default")
+    subject = data.get("subject", "math")
+    n = int(data.get("num_questions", 5))
+
+    history = conversations.get(session_id, [])
+    # small, safe context for question generation
+    ctx = "\n\n".join(
+        f"{m['role']}: {m['content']}"
+        for m in history[-10:] if m.get('content')
+    )
+
+    # Ask Gemini to emit *pure JSON* in a strict schema
+    system_prompt = (
+        f"You are a quiz generator for {SUBJECTS.get(subject, subject)}. "
+        f"Write {n} multiple-choice questions based on the conversation. "
+        "Each question must have exactly 4 choices. Include a 0-based 'answer_index' "
+        "and a one-sentence 'rationale' explaining the correct answer. "
+        "Return ONLY valid JSON with this schema:\n"
+        '{ "questions": [ { "question": "string", "choices": ["string","string","string","string"], "answer_index": 0, "rationale": "string" } ] }'
+    )
+
+    try:
+        model = build_gemini_model(system_prompt)
+        resp = model.generate_content(
+            f"Conversation:\n{ctx}\n\nNow produce the JSON. Do not include any text outside the JSON."
+        )
+        text = (getattr(resp, "text", None) or "").strip()
+        payload = json.loads(text)
+        # quick sanity checks
+        qs = payload.get("questions", [])
+        if not isinstance(qs, list) or len(qs) == 0:
+            return jsonify({"error": "No questions returned", "raw": text}), 500
+        # trim to n if overfilled
+        payload["questions"] = qs[:n]
+        return jsonify(payload)
+    except Exception as e:
+        logging.exception("Unable to quiz json")
+        return jsonify({"error": f"quiz generation failed: {e}"}), 500
