@@ -5,17 +5,80 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ subject_name }} Study Assistant</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+
+    <style>
+      /* Drawer & sidebar (local only) */
+      .sb-side {
+        position: absolute;
+        right: -70px;
+        top: 120px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        z-index: 10;
+      }
+      .sb-btn {
+        background: #fff;
+        border: 1px solid #e8e8e8;
+        border-radius: 12px;
+        padding: 0.6rem 0.8rem;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        width: 64px;
+        font-size: 0.8rem;
+        font-weight: 600;
+      }
+      .sb-btn:hover { background: #f8f8ff; }
+
+      @media (max-width: 1000px) {
+        .sb-side { position: static; flex-direction: row; justify-content: center; margin: 0.5rem 0; }
+        .sb-btn { width: auto; }
+      }
+
+      .sb-drawer {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.3);
+        display: none; align-items: flex-end; justify-content: flex-end; z-index: 200;
+      }
+      .sb-drawer.open { display: flex; }
+      .sb-drawer__panel {
+        width: min(520px, 92vw); height: 100vh; background: #fff;
+        padding: 16px 18px; overflow: auto; box-shadow: -10px 0 30px rgba(0,0,0,0.25);
+      }
+      .sb-drawer__close {
+        float: right; border: none; background: transparent; font-size: 1.2rem; cursor: pointer;
+      }
+      .sb-code { white-space: pre-wrap; background: #f7f7fb; padding: .75rem; border-radius: 8px; border: 1px solid #eee; }
+
+      /* Markdown styling inside drawer */
+      .sb-md ul { margin: .4rem 0 .6rem 1.2rem; }
+      .sb-md li { margin: .2rem 0; }
+      .sb-md a { color: #3b5cff; text-decoration: none; }
+      .sb-md a:hover { text-decoration: underline; }
+      .sb-md code { background:#f3f3f7; padding:0 .25rem; border-radius:4px; }
+      .sb-md pre { background:#f7f7fb; padding:.5rem; border-radius:8px; overflow:auto; }
+    </style>
   </head>
+
   <body>
-    <div class="chat-container" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
+    <div class="chat-container" style="position: relative;" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
       <div class="chat-header">
         <div class="header-content">
-          <a class="back-btn" href="{{ url_for('index') }}">&larr; Back</a>
+          <a class="back-btn" onclick="window.location.href='{{ url_for('chat.subjects') }}'">&larr; Back</a>
           <h1>{{ subject_name }} Study Assistant</h1>
-          <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
-
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="resetBtn" class="reset-btn" type="button">Reset Chat</button>
+            {% if current_user.is_authenticated %}
+              <a class="reset-btn" href="{{ url_for('flashcards.review_queue', subject=subject) }}">Flashcards</a>
+            {% endif %}
+          </div>
         </div>
       </div>
+
+      <aside class="sb-side">
+        <button id="summaryBtn" class="sb-btn" title="Summarize chat">📝 Summary</button>
+        <button id="quizBtn" class="sb-btn" title="Quiz me">🧪 Quiz</button>
+        <button id="exportBtn" class="sb-btn" title="Export chat + summary">⬇️ Export</button>
+      </aside>
 
       <div id="messages" class="chat-messages">
         <div class="message bot-message">
@@ -31,196 +94,249 @@
           <input id="questionInput" type="text" placeholder="Ask about {{ subject_name }}..." />
           <button id="sendBtn" type="button">Send</button>
         </div>
-
         <div id="loading" class="loading-indicator" style="display:none;">Thinking...</div>
       </div>
     </div>
 
-   <script>
-(function() {
-  const container = document.querySelector('.chat-container');
-  const subject = container.getAttribute('data-subject');
-  const subjectName = container.getAttribute('data-subject-name');
+    <div id="drawer" class="sb-drawer" aria-hidden="true">
+      <div class="sb-drawer__panel">
+        <button id="drawerClose" class="sb-drawer__close" title="Close">✕</button>
+        <div id="drawerContent"></div>
+      </div>
+    </div>
 
-  const messagesEl = document.getElementById('messages');
-  const inputEl = document.getElementById('questionInput');
-  const sendBtn = document.getElementById('sendBtn');
-  const loadingEl = document.getElementById('loading');
-  const resetBtn = document.getElementById('resetBtn');
+    <script>
+      (function () {
+        const subject = document.querySelector('.chat-container').getAttribute('data-subject');
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('questionInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const loadingEl = document.getElementById('loading');
+        const resetBtn = document.getElementById('resetBtn');
+        const summaryBtn = document.getElementById('summaryBtn');
+        const quizBtn = document.getElementById('quizBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const drawer = document.getElementById('drawer');
+        const drawerContent = document.getElementById('drawerContent');
+        const drawerClose = document.getElementById('drawerClose');
+        const IS_GUEST = {{ 'true' if (session.get('guest') and not current_user.is_authenticated) else 'false' }};
 
-  // OPTIONAL: if you keep a bottom verify button, give it an id
-  const bottomVerifyBtn = document.getElementById('verifyBtn'); // if you add it
+        if (IS_GUEST) {
+          const sb = document.querySelector('.sb-side');
+          if (sb) sb.style.display = 'none';
+        }
 
-  // Stable per-tab session id
-  let sessionId = sessionStorage.getItem('study_session_id');
-  if (!sessionId) {
-    sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    sessionStorage.setItem('study_session_id', sessionId);
-  }
+        let sessionId = sessionStorage.getItem('study_session_id');
+        if (!sessionId) {
+          sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+          sessionStorage.setItem('study_session_id', sessionId);
+        }
 
-  // ----- UI helpers -----
-  function appendMessage(role, text) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
+        function openDrawer(html){
+          if (IS_GUEST) { alert('Please log in to use this feature.'); return; }
+          drawerContent.innerHTML = html;
+          drawer.classList.add('open');
+          drawer.setAttribute('aria-hidden','false');
+        }
+        function closeDrawer(){
+          drawer.classList.remove('open');
+          drawer.setAttribute('aria-hidden','true');
+          drawerContent.innerHTML = '';
+        }
+        drawer.addEventListener('click', e => { if(e.target===drawer) closeDrawer(); });
+        drawerClose.addEventListener('click', closeDrawer);
 
-    const bubble = document.createElement('div');
-    bubble.className = 'message-content';
-    bubble.textContent = text;
-    wrapper.appendChild(bubble);
+        function appendMessage(role, text) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
+          const bubble = document.createElement('div');
+          bubble.className = 'message-content';
+          bubble.textContent = text;
+          wrapper.appendChild(bubble);
 
-    // If it's a bot message, add per-message Verify
-    if (role === 'bot') {
-      const toolsRow = document.createElement('div');
-      toolsRow.className = 'message-tools';
+          if (role === 'bot' && !IS_GUEST) {
+            const tools = document.createElement('div');
+            tools.className = 'message-tools';
+            Object.assign(tools.style, { display:'flex', gap:'8px', marginTop:'6px', opacity:'1', visibility:'visible' });
+            const verifyBtn = document.createElement('button');
+            verifyBtn.className = 'verify-btn';
+            verifyBtn.textContent = 'Verify';
+            verifyBtn.addEventListener('click', () => window.verifyInfo(verifyBtn, wrapper));
+            const flashBtn = document.createElement('button');
+            flashBtn.className = 'verify-btn';
+            flashBtn.textContent = 'Make flashcard';
+            flashBtn.addEventListener('click', async () => {
+              let sel = '';
+              const s = window.getSelection && window.getSelection();
+              if (s && s.rangeCount > 0) sel = s.toString().trim();
+              const back = sel || text;
+              const front = prompt('Question (front of flashcard)?', 'Summarize the key idea');
+              if (!front) return;
+              await saveFlashcard(front, back);
+            });
+            tools.append(verifyBtn, flashBtn);
+            wrapper.appendChild(tools);
+          }
+          messagesEl.appendChild(wrapper);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
 
-      const verifyBtn = document.createElement('button');
-      verifyBtn.type = 'button';
-      verifyBtn.className = 'verify-btn';
-      verifyBtn.textContent = 'Verify';
-      verifyBtn.addEventListener('click', () => {
-        window.verifyInfo(verifyBtn, wrapper); // verify this specific answer
-      });
+        async function saveFlashcard(front, back) {
+          if (IS_GUEST) { alert('Please log in to save flashcards.'); return; }
+          const res = await fetch('{{ url_for("flashcards.create_card") }}', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ front, back, subject })
+          });
+          if (!res.ok) alert('Failed to save flashcard'); else alert('Flashcard saved!');
+        }
 
-      toolsRow.appendChild(verifyBtn);
-      wrapper.appendChild(toolsRow);
-    }
+        function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+        function sb_renderMarkdown(md){
+          if(!md) return '';
+          let codeBlocks=[]; md=md.replace(/```([\s\S]*?)```/g,(_,c)=>{const i=codeBlocks.push(c)-1;return`\u0000CODE${i}\u0000`;});
+          let html=sb_escapeHtml(md);
+          html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
+          html=html.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+          html=html.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+          html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+          html=html.replace(/(^|\n)([*+-])\s+(.+)(?=\n|$)/g,'$1<li>$3</li>');
+          html=html.replace(/(?:\n<li>[\s\S]*?<\/li>)+/g,m=>`<ul>${m.replace(/\n(?=<li>)/g,'')}</ul>`);
+          html=html.split(/\n{2,}/).map(bl=>/^\s*<(ul|li|pre|code|h\d)/.test(bl)?bl:`<p>${bl.replace(/\n/g,'<br>')}</p>`).join('');
+          html=html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>`<pre><code>${sb_escapeHtml(codeBlocks[+i]||'')}</code></pre>`);
+          return html;
+        }
 
-    messagesEl.appendChild(wrapper);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return wrapper; // return for chaining if needed
-  }
+        window.verifyInfo = async function(btn, msgWrap) {
+          if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
+          const answerText = msgWrap.querySelector('.message-content').textContent.trim().slice(0,400);
+          openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching sources…</div>`);
+          if (btn) { btn.disabled = true; btn.dataset.old = btn.textContent; btn.textContent='Verifying…'; }
+          try {
+            const r = await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ session_id: sessionId, subject })});
+            const d = await r.json();
+            const md = (d.reply||d.answer)||'No sources found.';
+            const html = `<h3>Verification</h3>
+              <div class="sb-code" style="opacity:.8"><strong>Answer excerpt:</strong><br>${sb_escapeHtml(answerText)}</div>
+              <h4>Sources</h4><div class="sb-md">${sb_renderMarkdown(md)}</div>`;
+            openDrawer(html);
+          }catch(e){openDrawer(`<h3>Verification</h3><div class="sb-code">${sb_escapeHtml(e.message)}</div>`);}
+          finally{if(btn){btn.disabled=false;btn.textContent=btn.dataset.old||'Verify';}}
+        };
 
-  function appendSourcesUnder(wrapperEl, sourcesText) {
-    const existing = wrapperEl.querySelector('.verify-sources');
-    if (existing) existing.remove();
+        async function ask(q){
+          loadingEl.style.display='block'; sendBtn.disabled=true; inputEl.disabled=true;
+          try{
+            const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,subject,session_id:sessionId})});
+            const d=await r.json(); if(!r.ok)appendMessage('bot',d.error||'Error');else appendMessage('bot',d.answer);
+          }catch(e){appendMessage('bot','Network error: '+e.message);}
+          loadingEl.style.display='none'; sendBtn.disabled=false; inputEl.disabled=false; inputEl.focus();
+        }
+        sendBtn.addEventListener('click',()=>{const q=inputEl.value.trim();if(!q)return;appendMessage('user',q);inputEl.value='';ask(q);});
+        inputEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}});
+        resetBtn.addEventListener('click',async()=>{
+          loadingEl.style.display='block';
+          await fetch('{{ url_for("ai.reset_conversation") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
+          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content">Chat reset. Ask a new question!</div></div>';
+          loadingEl.style.display='none';
+        });
 
-    const block = document.createElement('div');
-    block.className = 'verify-sources';
-    block.innerText = sourcesText || 'No sources found.';
-    wrapperEl.appendChild(block);
+        /* ---------------- Interactive Quiz ---------------- */
+        const requireAuthAction = cb => (...a)=>{if(IS_GUEST){alert('Please log in to use this feature.');return;}cb(...a);};
+        let sbQuiz=null;
 
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
+        function sb_renderQuizView(){
+          const q=sbQuiz.questions[sbQuiz.index], total=sbQuiz.questions.length, chosen=sbQuiz.selection[sbQuiz.index];
+          const choices=q.choices.map((c,i)=>{
+            const sel=chosen===i, show=sbQuiz.checked[sbQuiz.index], cor=q.answer_index;
+            let cls=''; if(show){ if(i===cor) cls='border:1px solid #34c759;background:#eefcf2;'; else if(i===chosen) cls='border:1px solid #ff3b30;background:#fff4f3;'; }
+            return `<label class="sb-q-choice" data-idx="${i}" style="display:block;margin:.4rem 0;padding:.5rem .6rem;border:1px solid #e6e6ea;border-radius:8px;cursor:pointer;${cls}">
+              <input type="radio" name="sb-q" value="${i}" ${sel?'checked':''} style="margin-right:.5rem;">${sb_escapeHtml(c)}</label>`;
+          }).join('');
+          const fb=sbQuiz.checked[sbQuiz.index]?`<div style="margin-top:12px;padding:.6rem .75rem;border-radius:8px;background:#f7f7fb;border:1px solid #eee;">
+              <div style="font-weight:600;margin-bottom:.25rem;">${chosen===q.answer_index?'✅ Correct':'❌ Incorrect'}</div>
+              <div class="sb-md">${sb_renderMarkdown(q.rationale||'')}</div></div>`:'';
+          openDrawer(`<h3>Quiz</h3><div style="font-weight:600;margin-bottom:.6rem;">Q${sbQuiz.index+1}/${total}</div><div style="margin:.4rem 0 1rem;font-size:1.05rem;">${sb_escapeHtml(q.question)}</div>${choices}
+            <div style="display:flex;gap:10px;margin-top:10px;">
+              <button id="sbQuizCheck" class="sb-btn" style="width:auto;">Check</button>
+              <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button></div>${fb}`);
+          document.querySelectorAll('.sb-q-choice').forEach(el=>el.onclick=()=>{sbQuiz.selection[sbQuiz.index]=+el.dataset.idx;sb_renderQuizView();});
+          document.getElementById('sbQuizCheck').onclick=()=>{const ch=sbQuiz.selection[sbQuiz.index];if(ch==null)return;if(!sbQuiz.checked[sbQuiz.index]){if(ch===q.answer_index)sbQuiz.score++;sbQuiz.checked[sbQuiz.index]=true;}sb_renderQuizView();};
+          document.getElementById('sbQuizNext').onclick=()=>{if(sbQuiz.index>=total-1){const pct=Math.round(sbQuiz.score/total*100);openDrawer(`<h3>Results</h3><p style="font-size:1.05rem;"><strong>Score:</strong> ${sbQuiz.score} / ${total} (${pct}%)</p><div style="margin-top:10px;display:flex;gap:10px;"><button id="sbQuizReview" class="sb-btn" style="width:auto;">Review Answers</button><button id="sbQuizClose" class="sb-btn" style="width:auto;">Close</button></div>`);document.getElementById('sbQuizClose').onclick=closeDrawer;document.getElementById('sbQuizReview').onclick=()=>sb_renderQuizReview();return;}sbQuiz.index++;sb_renderQuizView();};
+        }
 
-  // ----- Network actions -----
-  window.ask = async function ask(question) {
-    loadingEl.style.display = 'block';
-    sendBtn.disabled = true;
-    inputEl.disabled = true;
-    try {
-      const res = await fetch('/api/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question: question,
-          subject: subject,
-          session_id: sessionId
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        appendMessage('bot', data.error || 'Error generating response.');
-        return;
-      }
-      appendMessage('bot', data.answer);
-    } catch (e) {
-      appendMessage('bot', 'Network error: ' + e.message);
-    } finally {
-      loadingEl.style.display = 'none';
-      sendBtn.disabled = false;
-      inputEl.disabled = false;
-      inputEl.focus();
-    }
-  };
+        function sb_renderQuizReview(){
+          const items=sbQuiz.questions.map((q,qi)=>{const ch=sbQuiz.selection[qi], cor=q.answer_index, ok=ch===cor;
+            return `<div style="border:1px solid #eee;border-radius:8px;padding:.6rem .75rem;margin:.5rem 0;">
+              <div style="font-weight:600;margin-bottom:.35rem;">${ok?'✅':'❌'} Q${qi+1}: ${sb_escapeHtml(q.question)}</div>
+              <div><strong>Your answer:</strong> ${ch!=null?sb_escapeHtml(q.choices[ch]):'(none)'}</div>
+              <div><strong>Correct:</strong> ${sb_escapeHtml(q.choices[cor])}</div>
+              <div class="sb-md" style="margin-top:.4rem;">${sb_renderMarkdown(q.rationale||'')}</div></div>`;
+          }).join('');
+          openDrawer(`<h3>Quiz Review</h3>${items}<div style="margin-top:10px;"><button id="sbQuizClose2" class="sb-btn" style="width:auto;">Close</button></div>`);
+          document.getElementById('sbQuizClose2').onclick=closeDrawer;
+        }
 
-  // Verify specific message (per-message button)
-  window.verifyInfo = async function verifyInfo(targetBtn, messageWrapper) {
-    // optimistic placeholder
-    const prev = messageWrapper.querySelector('.verify-sources');
-    if (prev) prev.remove();
-    const temp = document.createElement('div');
-    temp.className = 'verify-sources verifying';
-    temp.innerText = 'Verifying…';
-    messageWrapper.appendChild(temp);
+        quizBtn.addEventListener('click', requireAuthAction(async ()=>{
+          openDrawer('<h3>Quiz</h3><div class="sb-code">Creating…</div>');
+          try{
+            const r=await fetch('{{ url_for("ai.quiz_json") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,subject,num_questions:5})});
+            const d=await r.json(); if(!r.ok||!d.questions){openDrawer('<h3>Quiz</h3><div class="sb-code">Failed to generate quiz.</div>');return;}
+            sbQuiz={index:0,score:0,selection:Array(d.questions.length).fill(null),checked:Array(d.questions.length).fill(false),questions:d.questions};
+            sb_renderQuizView();
+          }catch(e){openDrawer('<h3>Quiz</h3><div class="sb-code">Failed: '+sb_escapeHtml(e.message)+'</div>');}
+        }));
 
-    if (targetBtn) {
-      targetBtn.disabled = true;
-      targetBtn.dataset.originalText = targetBtn.textContent;
-      targetBtn.textContent = 'Verifying…';
-    }
+        exportBtn.addEventListener('click', requireAuthAction(()=>{
+          const url=new URL('{{ url_for("ai.export_chat") }}',window.location.origin);
+          url.searchParams.set('session_id',sessionId);
+          url.searchParams.set('subject',subject);
+          window.location=url.toString();
+        }));
 
-    try {
-      const res = await fetch('/api/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, subject })
-      });
-      const data = await res.json();
-      const reply = (data && (data.reply || data.answer)) || 'No sources found.';
-      appendSourcesUnder(messageWrapper, reply);
-    } catch (e) {
-      appendSourcesUnder(messageWrapper, 'Verify failed: ' + e.message);
-    } finally {
-      if (targetBtn) {
-        targetBtn.disabled = false;
-        targetBtn.textContent = targetBtn.dataset.originalText || 'Verify';
-      }
-    }
-  };
+        summaryBtn.addEventListener('click', requireAuthAction(async () => {
+            // open drawer immediately so user sees feedback
+            openDrawer('<h3>Summary</h3><div class="sb-code">Generating…</div>');
 
-  // ----- Events -----
-  sendBtn.addEventListener('click', () => {
-    const q = inputEl.value.trim();
-    if (!q) return;
-    appendMessage('user', q);
-    inputEl.value = '';
-    ask(q);
-  });
+            try {
+              const res = await fetch('{{ url_for("ai.summary_chat") }}', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ session_id: sessionId, subject })
+              });
 
-  inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendBtn.click();
-    }
-  });
+              // Try to parse JSON even if !ok so we can show server's message
+              let data = null, raw = '';
+              try {
+                raw = await res.text();
+                data = raw ? JSON.parse(raw) : {};
+              } catch (e) {
+                console.error('Summary parse error:', e, raw);
+              }
 
-  // Bottom verify button (OPTIONAL): verifies the latest bot message
-  if (bottomVerifyBtn) {
-    bottomVerifyBtn.addEventListener('click', () => {
-      // find the last bot message wrapper
-      const wrappers = [...messagesEl.querySelectorAll('.message.bot-message')];
-      const lastBot = wrappers[wrappers.length - 1];
-      if (!lastBot) {
-        appendMessage('bot', 'No bot answer to verify yet.');
-        return;
-      }
-      // call verify for that answer
-      window.verifyInfo(bottomVerifyBtn, lastBot);
-    });
-  }
+              if (!res.ok) {
+                const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
+                openDrawer(
+                  `<h3>Summary</h3>
+                   <div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>
+                   ${data && data.detail ? `<div class="sb-code" style="margin-top:.5rem;">${sb_escapeHtml(data.detail)}</div>` : ''}`
+                );
+                return;
+              }
 
-  resetBtn.addEventListener('click', async () => {
-    loadingEl.style.display = 'block';
-    try {
-      await fetch('{{ url_for("reset_conversation") }}', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId })
-      });
-      messagesEl.innerHTML = `
-        <div class="message bot-message">
-          <div class="message-content">
-            Chat reset. Ask a new question about {{ subject_name }}!
-          </div>
-        </div>`;
-    } catch (e) {
-      appendMessage('bot', 'Reset failed: ' + e.message);
-    } finally {
-      loadingEl.style.display = 'none';
-    }
-  });
-})();
-</script>
+              const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
+              const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
+              openDrawer(
+                `<h3>Summary</h3>
+                 <div class="sb-md">${summaryHtml || '<p>No summary.</p>'}</div>
+                 ${termsHtml ? `<h4>Key terms</h4><div class="sb-md">${termsHtml}</div>` : ''}`
+              );
 
+            } catch (err) {
+              console.error('Summary request failed:', err);
+              openDrawer(`<h3>Summary</h3><div class="sb-code">Network error: ${sb_escapeHtml(err.message)}</div>`);
+            }
+          }));
+      })();
+    </script>
   </body>
 </html>
