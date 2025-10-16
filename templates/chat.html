@@ -100,7 +100,7 @@
         display: inline-flex;
         gap: 6px;
         align-self: flex-start;
-        margin: 4px 0 0 0; /* snug to bubble */
+        margin: 4px 0 0 0;
         padding: 0;
       }
       .message + .message-tools { margin-top: 4px; }
@@ -120,6 +120,19 @@
       }
       .icon-btn:hover { background: #e5e7eb; }
       .icon-btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+      /* ===== Verification containers ===== */
+      .sb-block {
+        border: 1px solid #eee;
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin: 10px 0;
+        background: #fafbff;
+      }
+      .sb-block__title {
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
     </style>
   </head>
 
@@ -198,7 +211,6 @@
 
     <script>
       (function () {
-
         const subject = document.querySelector('.chat-container').getAttribute('data-subject');
         const messagesEl = document.getElementById('messages');
         const inputEl = document.getElementById('questionInput');
@@ -216,6 +228,14 @@
         if (IS_GUEST) {
           const sb = document.querySelector('.sb-side');
           if (sb) sb.style.display = 'none';
+        }
+
+        /* Hoisted so listeners can use it */
+        function requireAuthAction(cb) {
+          return (...a) => {
+            if (IS_GUEST) { alert('Please log in to use this feature.'); return; }
+            cb(...a);
+          };
         }
 
         let sessionId = sessionStorage.getItem('study_session_id');
@@ -319,11 +339,7 @@
           return html;
         }
 
-                /* -------------- Auth wrapper for sidebar -------------- */
-        const requireAuthAction = cb => (...a)=>{if(IS_GUEST){alert('Please log in to use this feature.');return;}cb(...a);};
-
-
-        /* ---------------- Verify drawer (Gemini first, then WA; no verdict) ---------------- */
+        /* ================= Verify drawer: 3 clear containers ================= */
         function getPreviousUserQuestion(fromWrapper) {
           let node = fromWrapper.previousElementSibling;
           while (node) {
@@ -336,10 +352,18 @@
           return '';
         }
 
+        // Extract a markdown section by its H3 title into plain md (without the H3 line)
+        function extractSection(md, headingPattern) {
+          if (!md) return '';
+          const re = new RegExp(`(?:^|\\n)###\\s*${headingPattern}\\s*\\n([\\s\\S]*?)(?=\\n###\\s|$)`, 'i');
+          const m = md.match(re);
+          return m ? m[1].trim() : '';
+        }
+
         window.verifyInfo = async function(btn, msgWrap) {
           if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
           const question = getPreviousUserQuestion(msgWrap);
-          const answerExcerpt = msgWrap.querySelector('.message-content').textContent.trim().slice(0, 400);
+          const answerExcerpt = msgWrap.querySelector('.message-content').textContent.trim().slice(0, 800);
 
           openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching…</div>`);
           if (btn) { btn.disabled = true; btn.dataset.old = btn.innerHTML; btn.innerHTML = '⏳'; }
@@ -350,8 +374,52 @@
               body: JSON.stringify({ session_id: sessionId, subject, question, answer_excerpt: answerExcerpt })
             });
             const d = await r.json();
-            const md = (d.reply || d.answer) || 'No verification available.';
-            openDrawer(`<h3>Verification</h3><div class="sb-md">${sb_renderMarkdown(md)}</div>`);
+            const rawMd = (d.reply || d.answer) || '';
+
+            // Split server markdown into blocks
+            const waMd = extractSection(rawMd, 'Wolfram\\|Alpha Answer');
+            const geminiMd = extractSection(rawMd, 'Gemini Suggested Sources');
+
+            // Build containers
+            const blocks = [];
+
+            // Assistant excerpt (markdown-rendered so inline code/links show nicely)
+            blocks.push(`
+              <div class="sb-block">
+                <div class="sb-block__title"><strong>Assistant Answer (excerpt)</strong></div>
+                <div class="sb-md">${sb_renderMarkdown(answerExcerpt)}</div>
+              </div>
+            `);
+
+            if (waMd) {
+              blocks.push(`
+                <div class="sb-block">
+                  <div class="sb-block__title"><strong>Wolfram|Alpha Answer</strong></div>
+                  <div class="sb-md">${sb_renderMarkdown(waMd)}</div>
+                </div>
+              `);
+            }
+
+            if (geminiMd) {
+              blocks.push(`
+                <div class="sb-block">
+                  <div class="sb-block__title"><strong>Gemini Suggested Sources</strong></div>
+                  <div class="sb-md">${sb_renderMarkdown(geminiMd)}</div>
+                </div>
+              `);
+            }
+
+            // If server didn’t include recognizable sections, fallback to showing entire markdown once.
+            if (!waMd && !geminiMd && rawMd) {
+              blocks.push(`
+                <div class="sb-block">
+                  <div class="sb-block__title"><strong>Verification</strong></div>
+                  <div class="sb-md">${sb_renderMarkdown(rawMd)}</div>
+                </div>
+              `);
+            }
+
+            drawerContent.innerHTML = `<h3>Verification</h3>${blocks.join('')}`;
           } catch (e) {
             openDrawer(`<h3>Verification</h3><div class="sb-code">${sb_escapeHtml(e.message)}</div>`);
           } finally {
@@ -359,8 +427,7 @@
           }
         };
 
-        /* ---------------- Interactive Quiz (pick → check → next → results → review) ---------------- */
-        // Normalizers for backend shape variations
+        /* ---------------- Interactive Quiz (unchanged) ---------------- */
         function sb_getCorrectIdx(q) {
           let ai = q.answer_index;
           if (ai == null) ai = q.answerIndex;
@@ -633,13 +700,6 @@
           }
         }));
 
-        /* ---------------- Export ---------------- */
-        exportBtn.addEventListener('click', requireAuthAction(()=>{
-          const url=new URL('{{ url_for("ai.export_chat") }}',window.location.origin);
-          url.searchParams.set('session_id',sessionId);
-          url.searchParams.set('subject',subject);
-          window.location=url.toString();
-        }));
       })();
     </script>
   </body>
