@@ -48,7 +48,7 @@
       }
       .sb-code { white-space: pre-wrap; background: #f7f7fb; padding: .75rem; border-radius: 8px; border: 1px solid #eee; }
 
-      /* Markdown styling inside drawer and messages (safe, local) */
+      /* Markdown styling inside drawer */
       .sb-md ul { margin: .4rem 0 .6rem 1.2rem; }
       .sb-md li { margin: .2rem 0; }
       .sb-md a { color: #3b5cff; text-decoration: none; }
@@ -88,6 +88,37 @@
       .sb-btn--ghost { background: #fafafa; }
       .sb-btn--primary { background:#3b5cff; color:#fff; border:1px solid #2f45f7; }
       .sb-btn--primary:hover { filter: brightness(1.05); }
+
+      /* Make the stack a column so align-self works (won’t affect your bubbles) */
+      .chat-messages {
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Force the tools row to the left edge */
+      .message-tools {
+        display: inline-flex;       /* inline so it sits like a line under the bubble */
+        align-self: flex-start;     /* <— key: pin to the left in the column */
+        justify-content: flex-start;
+        text-align: left;
+        margin-left: 0 !important;  /* in case any parent adds a margin */
+      }
+
+      .icon-btn {
+        border: 0;
+        background: #f3f4f6;
+        width: 28px;
+        height: 28px;
+        border-radius: 9999px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 14px;
+        line-height: 1;
+      }
+      .icon-btn:hover { background: #e5e7eb; }
+      .icon-btn[disabled] { opacity: .5; cursor: not-allowed; }
     </style>
   </head>
 
@@ -117,11 +148,12 @@
 
       <div id="messages" class="chat-messages">
         <div class="message bot-message">
-          <div class="message-content sb-md">
-            <p>Hi! I'm your <strong>{{ subject_name }}</strong> assistant. Ask me anything about {{ subject_name }}.<br>
-            I remember the last 4 Q&amp;A pairs for context.</p>
+          <div class="message-content">
+            Hi! I'm your {{ subject_name }} assistant. Ask me anything about {{ subject_name }}.
+            I remember the last 4 Q&A pairs for context.
           </div>
         </div>
+        <!-- tools row will be injected as a sibling after bot messages -->
       </div>
 
       <div class="chat-input-container">
@@ -225,32 +257,6 @@
         drawer.addEventListener('click', e => { if(e.target===drawer) closeDrawer(); });
         drawerClose.addEventListener('click', closeDrawer);
 
-        /* Markdown utils (safe, local) */
-        function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
-        function sb_renderMarkdown(md){
-          if(!md) return '';
-          // capture fenced code blocks
-          let codeBlocks=[];
-          md=md.replace(/```([\s\S]*?)```/g,(_,c)=>{const i=codeBlocks.push(c)-1;return`\u0000CODE${i}\u0000`;});
-          // escape everything else
-          let html=sb_escapeHtml(md);
-          // inline code
-          html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
-          // bold/italic
-          html=html.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-          html=html.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
-          // links
-          html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
-          // bullet lists
-          html=html.replace(/(^|\n)([*+-])\s+(.+)(?=\n|$)/g,'$1<li>$3</li>');
-          html=html.replace(/(?:\n<li>[\s\S]*?<\/li>)+/g,m=>`<ul>${m.replace(/\n(?=<li>)/g,'')}</ul>`);
-          // paragraphs
-          html=html.split(/\n{2,}/).map(bl=>/^\s*<(ul|li|pre|code|h\d)/.test(bl)?bl:`<p>${bl.replace(/\n/g,'<br>')}</p>`).join('');
-          // restore code blocks
-          html=html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>`<pre><code>${sb_escapeHtml(codeBlocks[+i]||'')}</code></pre>`);
-          return html;
-        }
-
         /* Flashcard modal helpers */
         const fcModal  = document.getElementById('fcModal');
         const fcFront  = document.getElementById('fcFront');
@@ -294,62 +300,7 @@
           });
         }
 
-        /* Message rendering — NOW with Markdown */
-        function appendMessage(role, text) {
-          const wrapper = document.createElement('div');
-          wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
-
-          const bubble = document.createElement('div');
-          bubble.className = 'message-content sb-md';
-          // render markdown safely
-          bubble.innerHTML = sb_renderMarkdown(text || '');
-          wrapper.appendChild(bubble);
-
-          // per-message tools for bot replies
-          if (role === 'bot' && !IS_GUEST) {
-            const tools = document.createElement('div');
-            tools.className = 'message-tools';
-            Object.assign(tools.style, { display:'flex', gap:'8px', marginTop:'6px', opacity:'1', visibility:'visible' });
-
-            const verifyBtn = document.createElement('button');
-            verifyBtn.className = 'verify-btn';
-            verifyBtn.textContent = 'Verify';
-            verifyBtn.addEventListener('click', () => window.verifyInfo(verifyBtn, wrapper));
-
-            const flashBtn = document.createElement('button');
-            flashBtn.className = 'verify-btn';
-            flashBtn.textContent = 'Make flashcard';
-            flashBtn.addEventListener('click', async () => {
-              if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
-              let sel = '';
-              const s = window.getSelection && window.getSelection();
-              if (s && s.rangeCount > 0) sel = s.toString().trim();
-              // prefer selected text; else use stripped text content from the bubble (not HTML)
-              const backDefault = sel || bubble.textContent.trim();
-              const result = await openFlashcardModal({
-                front: 'Summarize the key idea',
-                back: backDefault
-              });
-              if (!result) return;
-              try {
-                const res = await fetch('{{ url_for("flashcards.create_card") }}', {
-                  method:'POST', headers:{'Content-Type':'application/json'},
-                  body: JSON.stringify({ front: result.front, back: result.back, subject })
-                });
-                if (!res.ok) showToast('Failed to save flashcard', 'error');
-                else showToast('✅ Flashcard saved!', 'success');
-              } catch(e) { showToast('Network error saving flashcard', 'error'); }
-            });
-
-            tools.append(verifyBtn, flashBtn);
-            wrapper.appendChild(tools);
-          }
-
-          messagesEl.appendChild(wrapper);
-          messagesEl.scrollTop = messagesEl.scrollHeight;
-        }
-
-        /* Flashcards direct save (kept for reuse) */
+        /* Flashcards direct save (kept) */
         async function saveFlashcard(front, back) {
           if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
           try {
@@ -364,12 +315,33 @@
           }
         }
 
+        /* Markdown utils (unchanged) */
+        function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+        function sb_renderMarkdown(md){
+          if(!md) return '';
+          let codeBlocks=[]; md=md.replace(/```([\s\S]*?)```/g,(_,c)=>{const i=codeBlocks.push(c)-1;return`\u0000CODE${i}\u0000`;});
+          let html=sb_escapeHtml(md);
+          html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
+          html=html.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+          html=html.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+          html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+          html=html.replace(/(^|\n)([*+-])\s+(.+)(?=\n|$)/g,'$1<li>$3</li>');
+          html=html.replace(/(?:\n<li>[\s\S]*?<\/li>)+/g,m=>`<ul>${m.replace(/\n(?=<li>)/g,'')}</ul>`);
+          html=html.split(/\n{2,}/).map(bl=>/^\s*<(ul|li|pre|code|h\d)/.test(bl)?bl:`<p>${bl.replace(/\n/g,'<br>')}</p>`).join('');
+          html=html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>`<pre><code>${sb_escapeHtml(codeBlocks[+i]||'')}</code></pre>`);
+          return html;
+        }
+
         /* ---------------- Verify drawer ---------------- */
         window.verifyInfo = async function(btn, msgWrap) {
           if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
-          const answerText = msgWrap.querySelector('.message-content')?.textContent.trim().slice(0,400) || '';
+          const answerText = msgWrap.querySelector('.message-content').textContent.trim().slice(0,400);
           openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching sources…</div>`);
-          if (btn) { btn.disabled = true; btn.dataset.old = btn.textContent; btn.textContent='Verifying…'; }
+          if (btn) {
+            btn.disabled = true;
+            btn.dataset.old = btn.innerHTML;
+            btn.innerHTML = '⏳';
+          }
           try {
             const r = await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ session_id: sessionId, subject })});
             const d = await r.json();
@@ -378,8 +350,11 @@
               <div class="sb-code" style="opacity:.8"><strong>Answer excerpt:</strong><br>${sb_escapeHtml(answerText)}</div>
               <h4>Sources</h4><div class="sb-md">${sb_renderMarkdown(md)}</div>`;
             openDrawer(html);
-          }catch(e){openDrawer(`<h3>Verification</h3><div class="sb-code">${sb_escapeHtml(e.message)}</div>`);}
-          finally{if(btn){btn.disabled=false;btn.textContent=btn.dataset.old||'Verify';}}
+          }catch(e){
+            openDrawer(`<h3>Verification</h3><div class="sb-code">${sb_escapeHtml(e.message)}</div>`);
+          } finally {
+            if(btn){btn.disabled=false;btn.innerHTML=btn.dataset.old||'✅';}
+          }
         };
 
         /* -------------- Chat: ask & reset -------------- */
@@ -393,12 +368,20 @@
           }catch(e){ appendMessage('bot','Network error: '+e.message); }
           loadingEl.style.display='none'; sendBtn.disabled=false; inputEl.disabled=false; inputEl.focus();
         }
-        sendBtn.addEventListener('click',()=>{const q=inputEl.value.trim();if(!q)return;appendMessage('user',q);inputEl.value='';ask(q);});
-        inputEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}});
+        sendBtn.addEventListener('click',()=>{
+          const q=inputEl.value.trim();if(!q)return;
+          appendMessage('user',q);
+          inputEl.value='';
+          ask(q);
+        });
+        inputEl.addEventListener('keydown',e=>{
+          if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}
+        });
+
         resetBtn.addEventListener('click',async()=>{
           loadingEl.style.display='block';
           await fetch('{{ url_for("ai.reset_conversation") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
-          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content sb-md"><p>Chat reset. Ask a new question!</p></div></div>';
+          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content">Chat reset. Ask a new question!</div></div>';
           loadingEl.style.display='none';
         });
 
@@ -432,7 +415,6 @@
         }));
 
         /* ---------------- Interactive Quiz ---------------- */
-        // Normalizers to handle any backend shape (answer_index, answerIndex, correct, 'B', etc.)
         function sb_getCorrectIdx(q) {
           let ai = q.answer_index;
           if (ai == null) ai = q.answerIndex;
@@ -455,7 +437,7 @@
           return {
             question: q.question || '',
             choices,
-            answer_index: correctIdx, // numeric or NaN
+            answer_index: correctIdx,
             rationale: q.rationale || ''
           };
         }
@@ -483,11 +465,7 @@
           const feedback = sbQuiz.checked[sbQuiz.index] ? `
             <div style="margin-top:12px;padding:.6rem .75rem;border-radius:8px;background:#f7f7fb;border:1px solid #eee;">
               <div style="font-weight:600;margin-bottom:.25rem;">
-                ${
-                  Number.isFinite(correctIdx)
-                    ? (chosen === correctIdx ? '✅ Correct' : '❌ Incorrect')
-                    : 'ℹ️ No correct answer provided'
-                }
+                ${ Number.isFinite(correctIdx) ? (chosen === correctIdx ? '✅ Correct' : '❌ Incorrect') : 'ℹ️ No correct answer provided' }
               </div>
               <div class="sb-md">${sb_renderMarkdown(q.rationale || '')}</div>
             </div>` : '';
@@ -501,7 +479,6 @@
               <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button>
             </div>${feedback}`);
 
-          // selection
           document.querySelectorAll('.sb-q-choice').forEach(el=>{
             el.onclick = () => {
               sbQuiz.selection[sbQuiz.index] = +el.dataset.idx;
@@ -509,7 +486,6 @@
             };
           });
 
-          // check
           document.getElementById('sbQuizCheck').onclick = () => {
             const ch = sbQuiz.selection[sbQuiz.index];
             if (ch == null) return;
@@ -520,9 +496,7 @@
             sb_renderQuizView();
           };
 
-          // next / finish
           document.getElementById('sbQuizNext').onclick = () => {
-            // Autoscore if user never pressed "Check"
             if (!sbQuiz.checked[sbQuiz.index]) {
               const ch = sbQuiz.selection[sbQuiz.index];
               if (ch != null && Number.isFinite(correctIdx) && ch === correctIdx) sbQuiz.score++;
@@ -597,6 +571,65 @@
           url.searchParams.set('subject',subject);
           window.location=url.toString();
         }));
+
+        /* ---------------- Message rendering (UNCHANGED container) ---------------- */
+        function appendMessage(role, text) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
+
+          const bubble = document.createElement('div');
+          bubble.className = 'message-content';
+          bubble.textContent = text;
+          wrapper.appendChild(bubble);
+
+          messagesEl.appendChild(wrapper);
+
+          // After a bot message, add a separate, left-aligned tools row
+          if (role === 'bot' && !IS_GUEST) {
+            const tools = document.createElement('div');
+            tools.className = 'message-tools';
+            tools.style.alignSelf = 'flex-start';
+
+            const verifyBtn = document.createElement('button');
+            verifyBtn.className = 'icon-btn';
+            verifyBtn.type = 'button';
+            verifyBtn.title = 'Verify answer';
+            verifyBtn.setAttribute('aria-label', 'Verify answer');
+            verifyBtn.innerHTML = '✅';
+            verifyBtn.addEventListener('click', () => window.verifyInfo(verifyBtn, wrapper));
+
+            const flashBtn = document.createElement('button');
+            flashBtn.className = 'icon-btn';
+            flashBtn.type = 'button';
+            flashBtn.title = 'Make flashcard';
+            flashBtn.setAttribute('aria-label', 'Make flashcard');
+            flashBtn.innerHTML = '📇';
+            flashBtn.addEventListener('click', async () => {
+              if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
+              let sel = '';
+              const s = window.getSelection && window.getSelection();
+              if (s && s.rangeCount > 0) sel = s.toString().trim();
+              const result = await openFlashcardModal({
+                front: 'Summarize the key idea',
+                back: sel || text
+              });
+              if (!result) return;
+              try {
+                const res = await fetch('{{ url_for("flashcards.create_card") }}', {
+                  method:'POST', headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({ front: result.front, back: result.back, subject })
+                });
+                if (!res.ok) showToast('Failed to save flashcard', 'error');
+                else showToast('✅ Flashcard saved!', 'success');
+              } catch(e) { showToast('Network error saving flashcard', 'error'); }
+            });
+
+            tools.append(verifyBtn, flashBtn);
+            messagesEl.appendChild(tools);
+          }
+
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
 
       })();
     </script>
