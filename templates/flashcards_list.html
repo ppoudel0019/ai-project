@@ -43,10 +43,8 @@
   </style>
 </head>
 <body>
-  <!-- Toast container -->
   <div id="toast-container"></div>
 
-  <!-- Confirm Modal -->
   <div id="confirmModal" class="cfm-modal" aria-hidden="true" role="dialog" aria-labelledby="cfmTitle">
     <div class="cfm-panel">
       <div class="cfm-header">
@@ -182,7 +180,6 @@
     });
     cfmConfirm.addEventListener('click', ()=>closeConfirm(true));
 
-    /* ---------- Create ---------- */
     document.getElementById('newCardForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -214,7 +211,6 @@
       });
       if (!yes) return;
 
-      // Proceed with deletion
       try {
         const r = await fetch('{{ url_for("flashcards.delete_card") }}', {
           method:'POST',
@@ -232,9 +228,6 @@
         showToast('Network error deleting flashcard', 'error');
       }
     }
-
-    // Accessibility: allow keyboard focus inside modal when opened
-    // (optional, keeps simple by not trapping focus)
   </script>
 </body>
 </html>

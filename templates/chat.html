@@ -48,7 +48,7 @@
       }
       .sb-code { white-space: pre-wrap; background: #f7f7fb; padding: .75rem; border-radius: 8px; border: 1px solid #eee; }
 
-      /* Markdown styling inside drawer */
+      /* Markdown styling inside drawer and messages (safe, local) */
       .sb-md ul { margin: .4rem 0 .6rem 1.2rem; }
       .sb-md li { margin: .2rem 0; }
       .sb-md a { color: #3b5cff; text-decoration: none; }
@@ -117,9 +117,9 @@
 
       <div id="messages" class="chat-messages">
         <div class="message bot-message">
-          <div class="message-content">
-            Hi! I'm your {{ subject_name }} assistant. Ask me anything about {{ subject_name }}.
-            I remember the last 4 Q&A pairs for context.
+          <div class="message-content sb-md">
+            <p>Hi! I'm your <strong>{{ subject_name }}</strong> assistant. Ask me anything about {{ subject_name }}.<br>
+            I remember the last 4 Q&amp;A pairs for context.</p>
           </div>
         </div>
       </div>
@@ -225,6 +225,32 @@
         drawer.addEventListener('click', e => { if(e.target===drawer) closeDrawer(); });
         drawerClose.addEventListener('click', closeDrawer);
 
+        /* Markdown utils (safe, local) */
+        function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+        function sb_renderMarkdown(md){
+          if(!md) return '';
+          // capture fenced code blocks
+          let codeBlocks=[];
+          md=md.replace(/```([\s\S]*?)```/g,(_,c)=>{const i=codeBlocks.push(c)-1;return`\u0000CODE${i}\u0000`;});
+          // escape everything else
+          let html=sb_escapeHtml(md);
+          // inline code
+          html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
+          // bold/italic
+          html=html.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+          html=html.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
+          // links
+          html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+          // bullet lists
+          html=html.replace(/(^|\n)([*+-])\s+(.+)(?=\n|$)/g,'$1<li>$3</li>');
+          html=html.replace(/(?:\n<li>[\s\S]*?<\/li>)+/g,m=>`<ul>${m.replace(/\n(?=<li>)/g,'')}</ul>`);
+          // paragraphs
+          html=html.split(/\n{2,}/).map(bl=>/^\s*<(ul|li|pre|code|h\d)/.test(bl)?bl:`<p>${bl.replace(/\n/g,'<br>')}</p>`).join('');
+          // restore code blocks
+          html=html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>`<pre><code>${sb_escapeHtml(codeBlocks[+i]||'')}</code></pre>`);
+          return html;
+        }
+
         /* Flashcard modal helpers */
         const fcModal  = document.getElementById('fcModal');
         const fcFront  = document.getElementById('fcFront');
@@ -268,16 +294,18 @@
           });
         }
 
-        /* Message rendering */
+        /* Message rendering — NOW with Markdown */
         function appendMessage(role, text) {
           const wrapper = document.createElement('div');
           wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
 
           const bubble = document.createElement('div');
-          bubble.className = 'message-content';
-          bubble.textContent = text;
+          bubble.className = 'message-content sb-md';
+          // render markdown safely
+          bubble.innerHTML = sb_renderMarkdown(text || '');
           wrapper.appendChild(bubble);
 
+          // per-message tools for bot replies
           if (role === 'bot' && !IS_GUEST) {
             const tools = document.createElement('div');
             tools.className = 'message-tools';
@@ -296,9 +324,11 @@
               let sel = '';
               const s = window.getSelection && window.getSelection();
               if (s && s.rangeCount > 0) sel = s.toString().trim();
+              // prefer selected text; else use stripped text content from the bubble (not HTML)
+              const backDefault = sel || bubble.textContent.trim();
               const result = await openFlashcardModal({
                 front: 'Summarize the key idea',
-                back: sel || text
+                back: backDefault
               });
               if (!result) return;
               try {
@@ -319,7 +349,7 @@
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
-        /* Flashcards direct save (used if needed elsewhere) */
+        /* Flashcards direct save (kept for reuse) */
         async function saveFlashcard(front, back) {
           if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
           try {
@@ -334,27 +364,10 @@
           }
         }
 
-        /* Markdown utils (local) */
-        function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
-        function sb_renderMarkdown(md){
-          if(!md) return '';
-          let codeBlocks=[]; md=md.replace(/```([\s\S]*?)```/g,(_,c)=>{const i=codeBlocks.push(c)-1;return`\u0000CODE${i}\u0000`;});
-          let html=sb_escapeHtml(md);
-          html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
-          html=html.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-          html=html.replace(/\*([^*\n]+)\*/g,'<em>$1</em>');
-          html=html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
-          html=html.replace(/(^|\n)([*+-])\s+(.+)(?=\n|$)/g,'$1<li>$3</li>');
-          html=html.replace(/(?:\n<li>[\s\S]*?<\/li>)+/g,m=>`<ul>${m.replace(/\n(?=<li>)/g,'')}</ul>`);
-          html=html.split(/\n{2,}/).map(bl=>/^\s*<(ul|li|pre|code|h\d)/.test(bl)?bl:`<p>${bl.replace(/\n/g,'<br>')}</p>`).join('');
-          html=html.replace(/\u0000CODE(\d+)\u0000/g,(_,i)=>`<pre><code>${sb_escapeHtml(codeBlocks[+i]||'')}</code></pre>`);
-          return html;
-        }
-
         /* ---------------- Verify drawer ---------------- */
         window.verifyInfo = async function(btn, msgWrap) {
           if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
-          const answerText = msgWrap.querySelector('.message-content').textContent.trim().slice(0,400);
+          const answerText = msgWrap.querySelector('.message-content')?.textContent.trim().slice(0,400) || '';
           openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching sources…</div>`);
           if (btn) { btn.disabled = true; btn.dataset.old = btn.textContent; btn.textContent='Verifying…'; }
           try {
@@ -385,7 +398,7 @@
         resetBtn.addEventListener('click',async()=>{
           loadingEl.style.display='block';
           await fetch('{{ url_for("ai.reset_conversation") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
-          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content">Chat reset. Ask a new question!</div></div>';
+          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content sb-md"><p>Chat reset. Ask a new question!</p></div></div>';
           loadingEl.style.display='none';
         });
 
