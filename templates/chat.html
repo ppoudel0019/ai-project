@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 
     <style>
-      /* Drawer & sidebar (local only) */
+      /* Local-only styles for sidebar & drawer */
       .sb-side {
         position: absolute;
         right: -70px;
@@ -98,6 +98,7 @@
       </div>
     </div>
 
+    <!-- Drawer -->
     <div id="drawer" class="sb-drawer" aria-hidden="true">
       <div class="sb-drawer__panel">
         <button id="drawerClose" class="sb-drawer__close" title="Close">✕</button>
@@ -132,6 +133,7 @@
           sessionStorage.setItem('study_session_id', sessionId);
         }
 
+        /* Drawer helpers */
         function openDrawer(html){
           if (IS_GUEST) { alert('Please log in to use this feature.'); return; }
           drawerContent.innerHTML = html;
@@ -146,9 +148,11 @@
         drawer.addEventListener('click', e => { if(e.target===drawer) closeDrawer(); });
         drawerClose.addEventListener('click', closeDrawer);
 
+        /* Message rendering */
         function appendMessage(role, text) {
           const wrapper = document.createElement('div');
           wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
+
           const bubble = document.createElement('div');
           bubble.className = 'message-content';
           bubble.textContent = text;
@@ -158,10 +162,12 @@
             const tools = document.createElement('div');
             tools.className = 'message-tools';
             Object.assign(tools.style, { display:'flex', gap:'8px', marginTop:'6px', opacity:'1', visibility:'visible' });
+
             const verifyBtn = document.createElement('button');
             verifyBtn.className = 'verify-btn';
             verifyBtn.textContent = 'Verify';
             verifyBtn.addEventListener('click', () => window.verifyInfo(verifyBtn, wrapper));
+
             const flashBtn = document.createElement('button');
             flashBtn.className = 'verify-btn';
             flashBtn.textContent = 'Make flashcard';
@@ -174,9 +180,11 @@
               if (!front) return;
               await saveFlashcard(front, back);
             });
+
             tools.append(verifyBtn, flashBtn);
             wrapper.appendChild(tools);
           }
+
           messagesEl.appendChild(wrapper);
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
@@ -190,6 +198,7 @@
           if (!res.ok) alert('Failed to save flashcard'); else alert('Flashcard saved!');
         }
 
+        /* Markdown utils (local) */
         function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
         function sb_renderMarkdown(md){
           if(!md) return '';
@@ -206,6 +215,7 @@
           return html;
         }
 
+        /* ---------------- Verify drawer ---------------- */
         window.verifyInfo = async function(btn, msgWrap) {
           if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
           const answerText = msgWrap.querySelector('.message-content').textContent.trim().slice(0,400);
@@ -223,12 +233,15 @@
           finally{if(btn){btn.disabled=false;btn.textContent=btn.dataset.old||'Verify';}}
         };
 
+        /* -------------- Chat: ask & reset -------------- */
         async function ask(q){
           loadingEl.style.display='block'; sendBtn.disabled=true; inputEl.disabled=true;
           try{
             const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,subject,session_id:sessionId})});
-            const d=await r.json(); if(!r.ok)appendMessage('bot',d.error||'Error');else appendMessage('bot',d.answer);
-          }catch(e){appendMessage('bot','Network error: '+e.message);}
+            const d=await r.json();
+            if(!r.ok) appendMessage('bot', d.error || 'Error');
+            else appendMessage('bot', d.answer);
+          }catch(e){ appendMessage('bot','Network error: '+e.message); }
           loadingEl.style.display='none'; sendBtn.disabled=false; inputEl.disabled=false; inputEl.focus();
         }
         sendBtn.addEventListener('click',()=>{const q=inputEl.value.trim();if(!q)return;appendMessage('user',q);inputEl.value='';ask(q);});
@@ -240,52 +253,198 @@
           loadingEl.style.display='none';
         });
 
-        /* ---------------- Interactive Quiz ---------------- */
+        /* -------------- Auth wrapper for sidebar -------------- */
         const requireAuthAction = cb => (...a)=>{if(IS_GUEST){alert('Please log in to use this feature.');return;}cb(...a);};
-        let sbQuiz=null;
+
+        /* ---------------- Summary drawer ---------------- */
+        summaryBtn.addEventListener('click', requireAuthAction(async () => {
+          openDrawer('<h3>Summary</h3><div class="sb-code">Generating…</div>');
+          try {
+            const res = await fetch('{{ url_for("ai.summary_chat") }}', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ session_id: sessionId, subject })
+            });
+
+            let data = null, raw = '';
+            try { raw = await res.text(); data = raw ? JSON.parse(raw) : {}; } catch (e) {}
+
+            if (!res.ok) {
+              const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
+              openDrawer(`<h3>Summary</h3><div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>`);
+              return;
+            }
+
+            const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
+            const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
+            openDrawer(`<h3>Summary</h3>
+              <div class="sb-md">${summaryHtml || '<p>No summary.</p>'}</div>
+              ${termsHtml ? `<h4>Key terms</h4><div class="sb-md">${termsHtml}</div>` : ''}`);
+          } catch (err) {
+            openDrawer(`<h3>Summary</h3><div class="sb-code">Network error: ${sb_escapeHtml(err.message)}</div>`);
+          }
+        }));
+
+        /* ---------------- Interactive Quiz ---------------- */
+
+        // Normalizers to handle any backend shape (answer_index, answerIndex, correct, 'B', etc.)
+        function sb_getCorrectIdx(q) {
+          let ai = q.answer_index;
+          if (ai == null) ai = q.answerIndex;
+          if (ai == null) ai = q.correct;
+          if (ai == null) ai = q.correct_index;
+          if (ai == null) ai = q.correctIndex;
+          if (ai == null) ai = q.answer;
+          if (typeof ai === 'string') {
+            const t = ai.trim().toUpperCase();
+            const map = { A:0, B:1, C:2, D:3 };
+            if (t in map) ai = map[t];
+          }
+          const n = Number(ai);
+          return Number.isFinite(n) ? n : NaN;
+        }
+        function sb_normQuestion(q) {
+          const correctIdx = sb_getCorrectIdx(q);
+          const choices = Array.isArray(q.choices) ? q.choices.slice(0,4) : [];
+          while (choices.length < 4) choices.push('—');
+          return {
+            question: q.question || '',
+            choices,
+            answer_index: correctIdx, // numeric or NaN
+            rationale: q.rationale || ''
+          };
+        }
+
+        let sbQuiz = null;
 
         function sb_renderQuizView(){
-          const q=sbQuiz.questions[sbQuiz.index], total=sbQuiz.questions.length, chosen=sbQuiz.selection[sbQuiz.index];
-          const choices=q.choices.map((c,i)=>{
-            const sel=chosen===i, show=sbQuiz.checked[sbQuiz.index], cor=q.answer_index;
-            let cls=''; if(show){ if(i===cor) cls='border:1px solid #34c759;background:#eefcf2;'; else if(i===chosen) cls='border:1px solid #ff3b30;background:#fff4f3;'; }
+          const q = sbQuiz.questions[sbQuiz.index];
+          const total = sbQuiz.questions.length;
+          const chosen = sbQuiz.selection[sbQuiz.index];
+          const correctIdx = Number(q.answer_index);
+
+          const choicesHtml = q.choices.map((c,i)=>{
+            const sel = chosen === i;
+            const show = sbQuiz.checked[sbQuiz.index];
+            let cls = '';
+            if (show && Number.isFinite(correctIdx)) {
+              if (i === correctIdx) cls = 'border:1px solid #34c759;background:#eefcf2;';
+              else if (i === chosen) cls = 'border:1px solid #ff3b30;background:#fff4f3;';
+            }
             return `<label class="sb-q-choice" data-idx="${i}" style="display:block;margin:.4rem 0;padding:.5rem .6rem;border:1px solid #e6e6ea;border-radius:8px;cursor:pointer;${cls}">
               <input type="radio" name="sb-q" value="${i}" ${sel?'checked':''} style="margin-right:.5rem;">${sb_escapeHtml(c)}</label>`;
           }).join('');
-          const fb=sbQuiz.checked[sbQuiz.index]?`<div style="margin-top:12px;padding:.6rem .75rem;border-radius:8px;background:#f7f7fb;border:1px solid #eee;">
-              <div style="font-weight:600;margin-bottom:.25rem;">${chosen===q.answer_index?'✅ Correct':'❌ Incorrect'}</div>
-              <div class="sb-md">${sb_renderMarkdown(q.rationale||'')}</div></div>`:'';
-          openDrawer(`<h3>Quiz</h3><div style="font-weight:600;margin-bottom:.6rem;">Q${sbQuiz.index+1}/${total}</div><div style="margin:.4rem 0 1rem;font-size:1.05rem;">${sb_escapeHtml(q.question)}</div>${choices}
+
+          const feedback = sbQuiz.checked[sbQuiz.index] ? `
+            <div style="margin-top:12px;padding:.6rem .75rem;border-radius:8px;background:#f7f7fb;border:1px solid #eee;">
+              <div style="font-weight:600;margin-bottom:.25rem;">
+                ${
+                  Number.isFinite(correctIdx)
+                    ? (chosen === correctIdx ? '✅ Correct' : '❌ Incorrect')
+                    : 'ℹ️ No correct answer provided'
+                }
+              </div>
+              <div class="sb-md">${sb_renderMarkdown(q.rationale || '')}</div>
+            </div>` : '';
+
+          openDrawer(`<h3>Quiz</h3>
+            <div style="font-weight:600;margin-bottom:.6rem;">Q${sbQuiz.index+1}/${total}</div>
+            <div style="margin:.4rem 0 1rem;font-size:1.05rem;">${sb_escapeHtml(q.question)}</div>
+            ${choicesHtml}
             <div style="display:flex;gap:10px;margin-top:10px;">
               <button id="sbQuizCheck" class="sb-btn" style="width:auto;">Check</button>
-              <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button></div>${fb}`);
-          document.querySelectorAll('.sb-q-choice').forEach(el=>el.onclick=()=>{sbQuiz.selection[sbQuiz.index]=+el.dataset.idx;sb_renderQuizView();});
-          document.getElementById('sbQuizCheck').onclick=()=>{const ch=sbQuiz.selection[sbQuiz.index];if(ch==null)return;if(!sbQuiz.checked[sbQuiz.index]){if(ch===q.answer_index)sbQuiz.score++;sbQuiz.checked[sbQuiz.index]=true;}sb_renderQuizView();};
-          document.getElementById('sbQuizNext').onclick=()=>{if(sbQuiz.index>=total-1){const pct=Math.round(sbQuiz.score/total*100);openDrawer(`<h3>Results</h3><p style="font-size:1.05rem;"><strong>Score:</strong> ${sbQuiz.score} / ${total} (${pct}%)</p><div style="margin-top:10px;display:flex;gap:10px;"><button id="sbQuizReview" class="sb-btn" style="width:auto;">Review Answers</button><button id="sbQuizClose" class="sb-btn" style="width:auto;">Close</button></div>`);document.getElementById('sbQuizClose').onclick=closeDrawer;document.getElementById('sbQuizReview').onclick=()=>sb_renderQuizReview();return;}sbQuiz.index++;sb_renderQuizView();};
+              <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button>
+            </div>${feedback}`);
+
+          // Wire up interactions
+          document.querySelectorAll('.sb-q-choice').forEach(el=>{
+            el.onclick = () => {
+              sbQuiz.selection[sbQuiz.index] = +el.dataset.idx;
+              sb_renderQuizView();
+            };
+          });
+
+          document.getElementById('sbQuizCheck').onclick = () => {
+            const ch = sbQuiz.selection[sbQuiz.index];
+            if (ch == null) return;
+            if (!sbQuiz.checked[sbQuiz.index]) {
+              if (Number.isFinite(correctIdx) && ch === correctIdx) sbQuiz.score++;
+              sbQuiz.checked[sbQuiz.index] = true;
+            }
+            sb_renderQuizView();
+          };
+
+          document.getElementById('sbQuizNext').onclick = () => {
+            // Autoscore if user never pressed "Check"
+            if (!sbQuiz.checked[sbQuiz.index]) {
+              const ch = sbQuiz.selection[sbQuiz.index];
+              if (ch != null && Number.isFinite(correctIdx) && ch === correctIdx) sbQuiz.score++;
+              sbQuiz.checked[sbQuiz.index] = true;
+            }
+
+            if (sbQuiz.index >= total - 1) {
+              const pct = Math.round((sbQuiz.score / total) * 100);
+              openDrawer(`<h3>Results</h3>
+                <p style="font-size:1.05rem;"><strong>Score:</strong> ${sbQuiz.score} / ${total} (${pct}%)</p>
+                <div style="margin-top:10px;display:flex;gap:10px;">
+                  <button id="sbQuizReview" class="sb-btn" style="width:auto;">Review</button>
+                  <button id="sbQuizClose" class="sb-btn" style="width:auto;">Close</button>
+                </div>`);
+              document.getElementById('sbQuizClose').onclick = closeDrawer;
+              document.getElementById('sbQuizReview').onclick = () => sb_renderQuizReview();
+              return;
+            }
+
+            sbQuiz.index++;
+            sb_renderQuizView();
+          };
         }
 
         function sb_renderQuizReview(){
-          const items=sbQuiz.questions.map((q,qi)=>{const ch=sbQuiz.selection[qi], cor=q.answer_index, ok=ch===cor;
+          const items = sbQuiz.questions.map((q,qi)=>{
+            const ch = sbQuiz.selection[qi];
+            const correct = Number(q.answer_index);
+            const ok = Number.isFinite(correct) && ch === correct;
             return `<div style="border:1px solid #eee;border-radius:8px;padding:.6rem .75rem;margin:.5rem 0;">
               <div style="font-weight:600;margin-bottom:.35rem;">${ok?'✅':'❌'} Q${qi+1}: ${sb_escapeHtml(q.question)}</div>
               <div><strong>Your answer:</strong> ${ch!=null?sb_escapeHtml(q.choices[ch]):'(none)'}</div>
-              <div><strong>Correct:</strong> ${sb_escapeHtml(q.choices[cor])}</div>
-              <div class="sb-md" style="margin-top:.4rem;">${sb_renderMarkdown(q.rationale||'')}</div></div>`;
+              <div><strong>Correct:</strong> ${Number.isFinite(correct)?sb_escapeHtml(q.choices[correct]):'—'}</div>
+              <div class="sb-md" style="margin-top:.4rem;">${sb_renderMarkdown(q.rationale||'')}</div>
+            </div>`;
           }).join('');
           openDrawer(`<h3>Quiz Review</h3>${items}<div style="margin-top:10px;"><button id="sbQuizClose2" class="sb-btn" style="width:auto;">Close</button></div>`);
-          document.getElementById('sbQuizClose2').onclick=closeDrawer;
+          document.getElementById('sbQuizClose2').onclick = closeDrawer;
         }
 
         quizBtn.addEventListener('click', requireAuthAction(async ()=>{
           openDrawer('<h3>Quiz</h3><div class="sb-code">Creating…</div>');
           try{
-            const r=await fetch('{{ url_for("ai.quiz_json") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId,subject,num_questions:5})});
-            const d=await r.json(); if(!r.ok||!d.questions){openDrawer('<h3>Quiz</h3><div class="sb-code">Failed to generate quiz.</div>');return;}
-            sbQuiz={index:0,score:0,selection:Array(d.questions.length).fill(null),checked:Array(d.questions.length).fill(false),questions:d.questions};
+            const r = await fetch('{{ url_for("ai.quiz_json") }}', {
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({session_id:sessionId,subject,num_questions:5})
+            });
+            const d = await r.json();
+            if(!r.ok || !d.questions){
+              openDrawer('<h3>Quiz</h3><div class="sb-code">Failed to generate quiz.</div>');
+              return;
+            }
+            const questions = (d.questions || []).map(sb_normQuestion);
+            sbQuiz = {
+              index: 0,
+              score: 0,
+              selection: Array(questions.length).fill(null),
+              checked: Array(questions.length).fill(false),
+              questions
+            };
+            // console.log('QUIZ Qs:', questions.map(q => ({ans:q.answer_index, choices:q.choices})));
             sb_renderQuizView();
-          }catch(e){openDrawer('<h3>Quiz</h3><div class="sb-code">Failed: '+sb_escapeHtml(e.message)+'</div>');}
+          }catch(e){
+            openDrawer('<h3>Quiz</h3><div class="sb-code">Failed: '+sb_escapeHtml(e.message)+'</div>');
+          }
         }));
 
+        /* ---------------- Export ---------------- */
         exportBtn.addEventListener('click', requireAuthAction(()=>{
           const url=new URL('{{ url_for("ai.export_chat") }}',window.location.origin);
           url.searchParams.set('session_id',sessionId);
@@ -293,49 +452,6 @@
           window.location=url.toString();
         }));
 
-        summaryBtn.addEventListener('click', requireAuthAction(async () => {
-            // open drawer immediately so user sees feedback
-            openDrawer('<h3>Summary</h3><div class="sb-code">Generating…</div>');
-
-            try {
-              const res = await fetch('{{ url_for("ai.summary_chat") }}', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ session_id: sessionId, subject })
-              });
-
-              // Try to parse JSON even if !ok so we can show server's message
-              let data = null, raw = '';
-              try {
-                raw = await res.text();
-                data = raw ? JSON.parse(raw) : {};
-              } catch (e) {
-                console.error('Summary parse error:', e, raw);
-              }
-
-              if (!res.ok) {
-                const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
-                openDrawer(
-                  `<h3>Summary</h3>
-                   <div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>
-                   ${data && data.detail ? `<div class="sb-code" style="margin-top:.5rem;">${sb_escapeHtml(data.detail)}</div>` : ''}`
-                );
-                return;
-              }
-
-              const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
-              const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
-              openDrawer(
-                `<h3>Summary</h3>
-                 <div class="sb-md">${summaryHtml || '<p>No summary.</p>'}</div>
-                 ${termsHtml ? `<h4>Key terms</h4><div class="sb-md">${termsHtml}</div>` : ''}`
-              );
-
-            } catch (err) {
-              console.error('Summary request failed:', err);
-              openDrawer(`<h3>Summary</h3><div class="sb-code">Network error: ${sb_escapeHtml(err.message)}</div>`);
-            }
-          }));
       })();
     </script>
   </body>

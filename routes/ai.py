@@ -37,6 +37,20 @@ def build_gemini_model(system_prompt: str):
     )
 
 
+def build_quiz_model(system_prompt: str, response_mime_type: str, max_output_tokens: int = 1200, temperature: float = 0.7):
+    cfg = {
+        "temperature": temperature,
+        "max_output_tokens": max_output_tokens,
+    }
+    if response_mime_type:
+        cfg["response_mime_type"] = response_mime_type
+    return genai.GenerativeModel(
+        model_name="gemini-2.0-flash-lite",
+        system_instruction=system_prompt,
+        generation_config=cfg,
+    )
+
+
 def to_gemini_history(history):
     converted = []
     for msg in history:
@@ -232,8 +246,8 @@ def export_chat():
     )
 
 
-@ai_bp.post("/api/quiz_json")
-def quiz_json():
+@ai_bp.post("/api/quiz_json1")
+def quiz_json1():
     import re, json, logging
 
     data = request.get_json() or {}
@@ -331,4 +345,148 @@ def quiz_json():
         return jsonify(dummy_payload)
 
         #return jsonify({"error": f"quiz generation failed: {msg}"}), 500
+
+
+@ai_bp.post("/api/quiz_json")
+def quiz_json():
+    import re, json, logging
+
+    def dummy_quiz(n=5):
+        return {
+            "questions": [
+                {
+                    "question": "Which planet is known as the Red Planet?",
+                    "choices": ["Earth", "Mars", "Venus", "Jupiter"],
+                    "answer_index": 1,
+                    "rationale": "Mars appears red because of iron oxide on its surface."
+                },
+                {
+                    "question": "What is the chemical symbol for water?",
+                    "choices": ["H2O", "O2", "HO", "H3O"],
+                    "answer_index": 0,
+                    "rationale": "Two hydrogens and one oxygen."
+                },
+                {
+                    "question": "Who wrote 'Romeo and Juliet'?",
+                    "choices": ["William Shakespeare", "Charles Dickens", "Leo Tolstoy", "Mark Twain"],
+                    "answer_index": 0,
+                    "rationale": "A Shakespeare tragedy from the late 16th century."
+                },
+                {
+                    "question": "Which gas do plants absorb during photosynthesis?",
+                    "choices": ["Oxygen", "Carbon Dioxide", "Nitrogen", "Hydrogen"],
+                    "answer_index": 1,
+                    "rationale": "Plants consume CO₂ and release O₂."
+                },
+                {
+                    "question": "What is Earth’s largest ocean?",
+                    "choices": ["Atlantic", "Indian", "Pacific", "Arctic"],
+                    "answer_index": 2,
+                    "rationale": "The Pacific covers about one-third of Earth’s surface."
+                },
+            ][:n]
+        }
+
+    def strip_fences(s: str) -> str:
+        s = s.strip()
+        # remove leading ```json or ``` and trailing ```
+        s = re.sub(r"^\s*```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s*```\s*$", "", s)
+        return s.strip()
+
+    def extract_first_object(s: str):
+        """Return the first top-level balanced {...} region, or None."""
+        start = s.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        for i in range(start, len(s)):
+            ch = s[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start:i+1]
+        return None  # never balanced
+
+    def try_load_json(raw: str):
+        # 1) strip code fences
+        cleaned = strip_fences(raw)
+        # 2) if extra prose, try to snip the first balanced object
+        obj = extract_first_object(cleaned) or cleaned
+        # 3) last-ditch: remove trailing commas that break JSON (common LLM mistake)
+        obj = re.sub(r",(\s*[}\]])", r"\1", obj)
+        return json.loads(obj)
+
+    data = request.get_json() or {}
+    session_id = data.get("session_id", "default")
+    subject = data.get("subject", "math")
+    n = int(data.get("num_questions", 5))
+
+    history = conversations.get(session_id, [])
+    ctx = "\n\n".join(
+        f"{m['role']}: {m['content']}"
+        for m in history[-10:] if m.get('content')
+    )
+
+    system_prompt = (
+        f"You are a quiz generator for {SUBJECTS.get(subject, subject)}. "
+        f"Write {n} multiple-choice questions based on the conversation. "
+        "Each question MUST have exactly 4 short choices. Include a 0-based 'answer_index' "
+        "and a one-sentence 'rationale'. "
+        "Return ONLY valid JSON — no markdown, no backticks, no commentary — with this schema. If token limit is reached atleast try to give the valid json:\n"
+        '{ "questions": [ { "question": "string", "choices": ["string","string","string","string"], "answer_index": 0, "rationale": "string" } ] }'
+    )
+
+    try:
+        # Force JSON & give enough tokens to avoid truncation
+        model = build_quiz_model(
+            system_prompt,
+            response_mime_type="application/json",
+            max_output_tokens=1400,
+            temperature=0.4,
+        )
+        resp = model.generate_content(
+            "Use the context below only if helpful to make topical questions. "
+            "If context is too short, create general questions for the subject. "
+            "Return ONLY JSON.\n\n"
+            f"Context:\n{ctx}"
+        )
+        raw = (getattr(resp, "text", None) or "").strip()
+
+        try:
+            payload = try_load_json(raw)
+        except Exception as je:
+            logging.warning("Quiz JSON parse failed: %s\nRaw: %s", je, raw[:1000])
+            # Fallback to dummy so UI still works
+            return jsonify({"questions": dummy_quiz(n)["questions"], "note": "fallback_dummy"}), 200
+
+        qs = payload.get("questions", [])
+        if not isinstance(qs, list) or not qs:
+            # Fallback again if structure wrong
+            return jsonify({"questions": dummy_quiz(n)["questions"], "note": "fallback_dummy_empty"}), 200
+
+        # Keep exactly n
+        payload["questions"] = qs[:n]
+        return jsonify(payload), 200
+
+    except Exception as e:
+        msg = str(e)
+        # Friendly quota message
+        if "429" in msg or "quota" in msg.lower():
+            return jsonify({
+                "error": "Gemini API quota exceeded — using dummy quiz.",
+                "questions": dummy_quiz(n)["questions"],
+                "note": "fallback_quota"
+            }), 200
+        # Any other fatal -> return dummy and include detail for logs
+        logging.exception("quiz_json fatal: %s", msg)
+        return jsonify({
+            "error": "Quiz generation failed — using dummy quiz.",
+            "questions": dummy_quiz(n)["questions"],
+            "note": "fallback_error",
+            "detail": msg[:400]
+        }), 200
+
 
