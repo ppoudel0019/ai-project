@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 
     <style>
-      /* Local-only styles for sidebar & drawer */
+      /* ===== Local-only styles for sidebar, drawer, modal, toasts ===== */
       .sb-side {
         position: absolute;
         right: -70px;
@@ -29,7 +29,6 @@
         font-weight: 600;
       }
       .sb-btn:hover { background: #f8f8ff; }
-
       @media (max-width: 1000px) {
         .sb-side { position: static; flex-direction: row; justify-content: center; margin: 0.5rem 0; }
         .sb-btn { width: auto; }
@@ -56,10 +55,46 @@
       .sb-md a:hover { text-decoration: underline; }
       .sb-md code { background:#f3f3f7; padding:0 .25rem; border-radius:4px; }
       .sb-md pre { background:#f7f7fb; padding:.5rem; border-radius:8px; overflow:auto; }
+
+      /* Toasts (local) */
+      #toast-container {
+        position: fixed; top: 20px; right: 20px; z-index: 9999;
+        display: flex; flex-direction: column; gap: 10px;
+      }
+
+      /* Flashcard modal (local) */
+      .sb-modal {
+        position: fixed; inset: 0; display: none; z-index: 300;
+        align-items: center; justify-content: center;
+        background: rgba(0,0,0,0.35);
+      }
+      .sb-modal.open { display: flex; }
+      .sb-modal__panel {
+        width: min(560px, 92vw); background: #fff; border-radius: 12px;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+        padding: 16px 18px;
+      }
+      .sb-modal__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+      .sb-modal__title { font-size: 1.05rem; font-weight: 700; }
+      .sb-modal__close { border: 0; background: transparent; font-size: 1.2rem; cursor: pointer; }
+      .sb-field { margin: 10px 0; }
+      .sb-label { display:block; font-size:.9rem; font-weight:600; margin-bottom:6px; }
+      .sb-input, .sb-textarea {
+        width: 100%; border: 1px solid #e6e6ea; border-radius: 8px; padding: .6rem .7rem;
+        font: inherit; outline: none;
+      }
+      .sb-textarea { min-height: 120px; resize: vertical; }
+      .sb-actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 12px; }
+      .sb-btn--ghost { background: #fafafa; }
+      .sb-btn--primary { background:#3b5cff; color:#fff; border:1px solid #2f45f7; }
+      .sb-btn--primary:hover { filter: brightness(1.05); }
     </style>
   </head>
 
   <body>
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+
     <div class="chat-container" style="position: relative;" data-subject="{{ subject }}" data-subject-name="{{ subject_name }}">
       <div class="chat-header">
         <div class="header-content">
@@ -106,6 +141,28 @@
       </div>
     </div>
 
+    <!-- Flashcard Modal -->
+    <div id="fcModal" class="sb-modal" aria-hidden="true" role="dialog" aria-labelledby="fcTitle">
+      <div class="sb-modal__panel">
+        <div class="sb-modal__header">
+          <div id="fcTitle" class="sb-modal__title">Create Flashcard</div>
+          <button id="fcClose" class="sb-modal__close" title="Close">✕</button>
+        </div>
+        <div class="sb-field">
+          <label class="sb-label" for="fcFront">Front (Question)</label>
+          <input id="fcFront" class="sb-input" type="text" placeholder="e.g., What is the chain rule?" />
+        </div>
+        <div class="sb-field">
+          <label class="sb-label" for="fcBack">Back (Answer / Notes)</label>
+          <textarea id="fcBack" class="sb-textarea" placeholder="Your answer or explanation..."></textarea>
+        </div>
+        <div class="sb-actions">
+          <button id="fcCancel" class="sb-btn sb-btn--ghost" type="button">Cancel</button>
+          <button id="fcSave" class="sb-btn sb-btn--primary" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+
     <script>
       (function () {
         const subject = document.querySelector('.chat-container').getAttribute('data-subject');
@@ -133,6 +190,26 @@
           sessionStorage.setItem('study_session_id', sessionId);
         }
 
+        /* Toast helper */
+        function showToast(message, type = 'info') {
+          const container = document.getElementById('toast-container');
+          if (!container) return;
+          const toast = document.createElement('div');
+          toast.textContent = message;
+          toast.style.cssText = `
+            background: ${type === 'error' ? '#ff3b30' : type === 'success' ? '#34c759' : '#333'};
+            color: white; padding: 10px 16px; border-radius: 8px;
+            font-size: 0.9rem; box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            opacity: 0; transform: translateY(-10px); transition: all 0.4s ease;
+          `;
+          container.appendChild(toast);
+          requestAnimationFrame(() => { toast.style.opacity = '1'; toast.style.transform = 'translateY(0)'; });
+          setTimeout(() => {
+            toast.style.opacity = '0'; toast.style.transform = 'translateY(-10px)';
+            setTimeout(() => toast.remove(), 400);
+          }, 2500);
+        }
+
         /* Drawer helpers */
         function openDrawer(html){
           if (IS_GUEST) { alert('Please log in to use this feature.'); return; }
@@ -147,6 +224,49 @@
         }
         drawer.addEventListener('click', e => { if(e.target===drawer) closeDrawer(); });
         drawerClose.addEventListener('click', closeDrawer);
+
+        /* Flashcard modal helpers */
+        const fcModal  = document.getElementById('fcModal');
+        const fcFront  = document.getElementById('fcFront');
+        const fcBack   = document.getElementById('fcBack');
+        const fcSave   = document.getElementById('fcSave');
+        const fcCancel = document.getElementById('fcCancel');
+        const fcClose  = document.getElementById('fcClose');
+        let _fcResolve = null;
+
+        function openFlashcardModal({front='', back=''} = {}) {
+          if (!fcModal) return Promise.resolve(null);
+          fcFront.value = front;
+          fcBack.value  = back;
+          fcModal.classList.add('open');
+          fcModal.setAttribute('aria-hidden','false');
+          setTimeout(() => (front ? fcBack : fcFront).focus(), 0);
+          return new Promise(resolve => { _fcResolve = resolve; });
+        }
+        function closeFlashcardModal(result = null) {
+          if (!fcModal) return;
+          fcModal.classList.remove('open');
+          fcModal.setAttribute('aria-hidden','true');
+          if (_fcResolve) { _fcResolve(result); _fcResolve = null; }
+        }
+        if (fcModal) {
+          fcCancel?.addEventListener('click', () => closeFlashcardModal(null));
+          fcClose?.addEventListener('click', () => closeFlashcardModal(null));
+          fcModal.addEventListener('click', (e) => { if (e.target === fcModal) closeFlashcardModal(null); });
+          fcModal.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); closeFlashcardModal(null); }
+            if (e.key === 'Enter' && (document.activeElement === fcFront || document.activeElement === fcBack)) {
+              e.preventDefault(); fcSave?.click();
+            }
+          });
+          fcSave?.addEventListener('click', () => {
+            const front = fcFront.value.trim();
+            const back  = fcBack.value.trim();
+            if (!front) { fcFront.focus(); return; }
+            if (!back)  { fcBack.focus(); return; }
+            closeFlashcardModal({ front, back });
+          });
+        }
 
         /* Message rendering */
         function appendMessage(role, text) {
@@ -172,13 +292,23 @@
             flashBtn.className = 'verify-btn';
             flashBtn.textContent = 'Make flashcard';
             flashBtn.addEventListener('click', async () => {
+              if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
               let sel = '';
               const s = window.getSelection && window.getSelection();
               if (s && s.rangeCount > 0) sel = s.toString().trim();
-              const back = sel || text;
-              const front = prompt('Question (front of flashcard)?', 'Summarize the key idea');
-              if (!front) return;
-              await saveFlashcard(front, back);
+              const result = await openFlashcardModal({
+                front: 'Summarize the key idea',
+                back: sel || text
+              });
+              if (!result) return;
+              try {
+                const res = await fetch('{{ url_for("flashcards.create_card") }}', {
+                  method:'POST', headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({ front: result.front, back: result.back, subject })
+                });
+                if (!res.ok) showToast('Failed to save flashcard', 'error');
+                else showToast('✅ Flashcard saved!', 'success');
+              } catch(e) { showToast('Network error saving flashcard', 'error'); }
             });
 
             tools.append(verifyBtn, flashBtn);
@@ -189,13 +319,19 @@
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
+        /* Flashcards direct save (used if needed elsewhere) */
         async function saveFlashcard(front, back) {
-          if (IS_GUEST) { alert('Please log in to save flashcards.'); return; }
-          const res = await fetch('{{ url_for("flashcards.create_card") }}', {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ front, back, subject })
-          });
-          if (!res.ok) alert('Failed to save flashcard'); else alert('Flashcard saved!');
+          if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
+          try {
+            const res = await fetch('{{ url_for("flashcards.create_card") }}', {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ front, back, subject })
+            });
+            if (!res.ok) showToast('Failed to save flashcard', 'error');
+            else showToast('✅ Flashcard saved!', 'success');
+          } catch (e) {
+            showToast('Network error saving flashcard', 'error');
+          }
         }
 
         /* Markdown utils (local) */
@@ -265,16 +401,13 @@
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify({ session_id: sessionId, subject })
             });
-
             let data = null, raw = '';
             try { raw = await res.text(); data = raw ? JSON.parse(raw) : {}; } catch (e) {}
-
             if (!res.ok) {
               const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
               openDrawer(`<h3>Summary</h3><div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>`);
               return;
             }
-
             const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
             const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
             openDrawer(`<h3>Summary</h3>
@@ -286,7 +419,6 @@
         }));
 
         /* ---------------- Interactive Quiz ---------------- */
-
         // Normalizers to handle any backend shape (answer_index, answerIndex, correct, 'B', etc.)
         function sb_getCorrectIdx(q) {
           let ai = q.answer_index;
@@ -356,7 +488,7 @@
               <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button>
             </div>${feedback}`);
 
-          // Wire up interactions
+          // selection
           document.querySelectorAll('.sb-q-choice').forEach(el=>{
             el.onclick = () => {
               sbQuiz.selection[sbQuiz.index] = +el.dataset.idx;
@@ -364,6 +496,7 @@
             };
           });
 
+          // check
           document.getElementById('sbQuizCheck').onclick = () => {
             const ch = sbQuiz.selection[sbQuiz.index];
             if (ch == null) return;
@@ -374,6 +507,7 @@
             sb_renderQuizView();
           };
 
+          // next / finish
           document.getElementById('sbQuizNext').onclick = () => {
             // Autoscore if user never pressed "Check"
             if (!sbQuiz.checked[sbQuiz.index]) {
@@ -437,7 +571,6 @@
               checked: Array(questions.length).fill(false),
               questions
             };
-            // console.log('QUIZ Qs:', questions.map(q => ({ans:q.answer_index, choices:q.choices})));
             sb_renderQuizView();
           }catch(e){
             openDrawer('<h3>Quiz</h3><div class="sb-code">Failed: '+sb_escapeHtml(e.message)+'</div>');
