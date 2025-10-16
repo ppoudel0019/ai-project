@@ -89,26 +89,27 @@
       .sb-btn--primary { background:#3b5cff; color:#fff; border:1px solid #2f45f7; }
       .sb-btn--primary:hover { filter: brightness(1.05); }
 
-      /* Make the stack a column so align-self works (won’t affect your bubbles) */
+      /* Keep message column to allow left-aligned tool row */
       .chat-messages {
         display: flex;
         flex-direction: column;
       }
 
-      /* Force the tools row to the left edge */
+      /* Left-aligned tiny tool row right under bot bubble (separate sibling) */
       .message-tools {
-        display: inline-flex;       /* inline so it sits like a line under the bubble */
-        align-self: flex-start;     /* <— key: pin to the left in the column */
-        justify-content: flex-start;
-        text-align: left;
-        margin-left: 0 !important;  /* in case any parent adds a margin */
+        display: inline-flex;
+        gap: 6px;
+        align-self: flex-start;
+        margin: 4px 0 0 0; /* snug to bubble */
+        padding: 0;
       }
+      .message + .message-tools { margin-top: 4px; }
 
       .icon-btn {
         border: 0;
         background: #f3f4f6;
-        width: 28px;
-        height: 28px;
+        width: 24px;
+        height: 24px;
         border-radius: 9999px;
         display: inline-flex;
         align-items: center;
@@ -153,7 +154,7 @@
             I remember the last 4 Q&A pairs for context.
           </div>
         </div>
-        <!-- tools row will be injected as a sibling after bot messages -->
+        <!-- tool rows will be injected as separate siblings after each bot message -->
       </div>
 
       <div class="chat-input-container">
@@ -197,6 +198,7 @@
 
     <script>
       (function () {
+
         const subject = document.querySelector('.chat-container').getAttribute('data-subject');
         const messagesEl = document.getElementById('messages');
         const inputEl = document.getElementById('questionInput');
@@ -300,21 +302,6 @@
           });
         }
 
-        /* Flashcards direct save (kept) */
-        async function saveFlashcard(front, back) {
-          if (IS_GUEST) { showToast('Please log in to save flashcards.', 'error'); return; }
-          try {
-            const res = await fetch('{{ url_for("flashcards.create_card") }}', {
-              method:'POST', headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({ front, back, subject })
-            });
-            if (!res.ok) showToast('Failed to save flashcard', 'error');
-            else showToast('✅ Flashcard saved!', 'success');
-          } catch (e) {
-            showToast('Network error saving flashcard', 'error');
-          }
-        }
-
         /* Markdown utils (unchanged) */
         function sb_escapeHtml(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
         function sb_renderMarkdown(md){
@@ -332,89 +319,48 @@
           return html;
         }
 
-        /* ---------------- Verify drawer ---------------- */
+                /* -------------- Auth wrapper for sidebar -------------- */
+        const requireAuthAction = cb => (...a)=>{if(IS_GUEST){alert('Please log in to use this feature.');return;}cb(...a);};
+
+
+        /* ---------------- Verify drawer (Gemini first, then WA; no verdict) ---------------- */
+        function getPreviousUserQuestion(fromWrapper) {
+          let node = fromWrapper.previousElementSibling;
+          while (node) {
+            if (node.classList && node.classList.contains('user-message')) {
+              const mc = node.querySelector('.message-content');
+              return (mc ? mc.textContent : '').trim();
+            }
+            node = node.previousElementSibling;
+          }
+          return '';
+        }
+
         window.verifyInfo = async function(btn, msgWrap) {
           if (IS_GUEST) { alert('Please log in to verify answers.'); return; }
-          const answerText = msgWrap.querySelector('.message-content').textContent.trim().slice(0,400);
-          openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching sources…</div>`);
-          if (btn) {
-            btn.disabled = true;
-            btn.dataset.old = btn.innerHTML;
-            btn.innerHTML = '⏳';
-          }
+          const question = getPreviousUserQuestion(msgWrap);
+          const answerExcerpt = msgWrap.querySelector('.message-content').textContent.trim().slice(0, 400);
+
+          openDrawer(`<h3>Verification</h3><div class="sb-code">Fetching…</div>`);
+          if (btn) { btn.disabled = true; btn.dataset.old = btn.innerHTML; btn.innerHTML = '⏳'; }
           try {
-            const r = await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ session_id: sessionId, subject })});
+            const r = await fetch('/api/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ session_id: sessionId, subject, question, answer_excerpt: answerExcerpt })
+            });
             const d = await r.json();
-            const md = (d.reply||d.answer)||'No sources found.';
-            const html = `<h3>Verification</h3>
-              <div class="sb-code" style="opacity:.8"><strong>Answer excerpt:</strong><br>${sb_escapeHtml(answerText)}</div>
-              <h4>Sources</h4><div class="sb-md">${sb_renderMarkdown(md)}</div>`;
-            openDrawer(html);
-          }catch(e){
+            const md = (d.reply || d.answer) || 'No verification available.';
+            openDrawer(`<h3>Verification</h3><div class="sb-md">${sb_renderMarkdown(md)}</div>`);
+          } catch (e) {
             openDrawer(`<h3>Verification</h3><div class="sb-code">${sb_escapeHtml(e.message)}</div>`);
           } finally {
-            if(btn){btn.disabled=false;btn.innerHTML=btn.dataset.old||'✅';}
+            if (btn) { btn.disabled = false; btn.innerHTML = btn.dataset.old || '✅'; }
           }
         };
 
-        /* -------------- Chat: ask & reset -------------- */
-        async function ask(q){
-          loadingEl.style.display='block'; sendBtn.disabled=true; inputEl.disabled=true;
-          try{
-            const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,subject,session_id:sessionId})});
-            const d=await r.json();
-            if(!r.ok) appendMessage('bot', d.error || 'Error');
-            else appendMessage('bot', d.answer);
-          }catch(e){ appendMessage('bot','Network error: '+e.message); }
-          loadingEl.style.display='none'; sendBtn.disabled=false; inputEl.disabled=false; inputEl.focus();
-        }
-        sendBtn.addEventListener('click',()=>{
-          const q=inputEl.value.trim();if(!q)return;
-          appendMessage('user',q);
-          inputEl.value='';
-          ask(q);
-        });
-        inputEl.addEventListener('keydown',e=>{
-          if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}
-        });
-
-        resetBtn.addEventListener('click',async()=>{
-          loadingEl.style.display='block';
-          await fetch('{{ url_for("ai.reset_conversation") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
-          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content">Chat reset. Ask a new question!</div></div>';
-          loadingEl.style.display='none';
-        });
-
-        /* -------------- Auth wrapper for sidebar -------------- */
-        const requireAuthAction = cb => (...a)=>{if(IS_GUEST){alert('Please log in to use this feature.');return;}cb(...a);};
-
-        /* ---------------- Summary drawer ---------------- */
-        summaryBtn.addEventListener('click', requireAuthAction(async () => {
-          openDrawer('<h3>Summary</h3><div class="sb-code">Generating…</div>');
-          try {
-            const res = await fetch('{{ url_for("ai.summary_chat") }}', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ session_id: sessionId, subject })
-            });
-            let data = null, raw = '';
-            try { raw = await res.text(); data = raw ? JSON.parse(raw) : {}; } catch (e) {}
-            if (!res.ok) {
-              const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
-              openDrawer(`<h3>Summary</h3><div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>`);
-              return;
-            }
-            const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
-            const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
-            openDrawer(`<h3>Summary</h3>
-              <div class="sb-md">${summaryHtml || '<p>No summary.</p>'}</div>
-              ${termsHtml ? `<h4>Key terms</h4><div class="sb-md">${termsHtml}</div>` : ''}`);
-          } catch (err) {
-            openDrawer(`<h3>Summary</h3><div class="sb-code">Network error: ${sb_escapeHtml(err.message)}</div>`);
-          }
-        }));
-
-        /* ---------------- Interactive Quiz ---------------- */
+        /* ---------------- Interactive Quiz (pick → check → next → results → review) ---------------- */
+        // Normalizers for backend shape variations
         function sb_getCorrectIdx(q) {
           let ai = q.answer_index;
           if (ai == null) ai = q.answerIndex;
@@ -479,6 +425,7 @@
               <button id="sbQuizNext" class="sb-btn" style="width:auto;" ${chosen==null?'disabled':''}>${sbQuiz.index<total-1?'Next':'Finish'}</button>
             </div>${feedback}`);
 
+          // selection
           document.querySelectorAll('.sb-q-choice').forEach(el=>{
             el.onclick = () => {
               sbQuiz.selection[sbQuiz.index] = +el.dataset.idx;
@@ -486,6 +433,7 @@
             };
           });
 
+          // check
           document.getElementById('sbQuizCheck').onclick = () => {
             const ch = sbQuiz.selection[sbQuiz.index];
             if (ch == null) return;
@@ -496,6 +444,7 @@
             sb_renderQuizView();
           };
 
+          // next / finish
           document.getElementById('sbQuizNext').onclick = () => {
             if (!sbQuiz.checked[sbQuiz.index]) {
               const ch = sbQuiz.selection[sbQuiz.index];
@@ -572,7 +521,7 @@
           window.location=url.toString();
         }));
 
-        /* ---------------- Message rendering (UNCHANGED container) ---------------- */
+        /* ---------------- Message rendering (container untouched) ---------------- */
         function appendMessage(role, text) {
           const wrapper = document.createElement('div');
           wrapper.className = 'message ' + (role === 'user' ? 'user-message' : 'bot-message');
@@ -588,7 +537,6 @@
           if (role === 'bot' && !IS_GUEST) {
             const tools = document.createElement('div');
             tools.className = 'message-tools';
-            tools.style.alignSelf = 'flex-start';
 
             const verifyBtn = document.createElement('button');
             verifyBtn.className = 'icon-btn';
@@ -631,6 +579,67 @@
           messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
+        /* -------------- Chat: ask & reset -------------- */
+        async function ask(q){
+          loadingEl.style.display='block'; sendBtn.disabled=true; inputEl.disabled=true;
+          try{
+            const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,subject,session_id:sessionId})});
+            const d=await r.json();
+            if(!r.ok) appendMessage('bot', d.error || 'Error');
+            else appendMessage('bot', d.answer);
+          }catch(e){ appendMessage('bot','Network error: '+e.message); }
+          loadingEl.style.display='none'; sendBtn.disabled=false; inputEl.disabled=false; inputEl.focus();
+        }
+        sendBtn.addEventListener('click',()=>{
+          const q=inputEl.value.trim();if(!q)return;
+          appendMessage('user',q);
+          inputEl.value='';
+          ask(q);
+        });
+        inputEl.addEventListener('keydown',e=>{
+          if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendBtn.click();}
+        });
+
+        resetBtn.addEventListener('click',async()=>{
+          loadingEl.style.display='block';
+          await fetch('{{ url_for("ai.reset_conversation") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
+          messagesEl.innerHTML='<div class="message bot-message"><div class="message-content">Chat reset. Ask a new question!</div></div>';
+          loadingEl.style.display='none';
+        });
+
+        /* ---------------- Summary drawer ---------------- */
+        summaryBtn.addEventListener('click', requireAuthAction(async () => {
+          openDrawer('<h3>Summary</h3><div class="sb-code">Generating…</div>');
+          try {
+            const res = await fetch('{{ url_for("ai.summary_chat") }}', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ session_id: sessionId, subject })
+            });
+            let data = null, raw = '';
+            try { raw = await res.text(); data = raw ? JSON.parse(raw) : {}; } catch (e) {}
+            if (!res.ok) {
+              const msg = (data && (data.error || data.detail)) || `HTTP ${res.status}`;
+              openDrawer(`<h3>Summary</h3><div class="sb-code">Error: ${sb_escapeHtml(msg)}</div>`);
+              return;
+            }
+            const summaryHtml = sb_renderMarkdown((data && data.summary) || '');
+            const termsHtml   = sb_renderMarkdown((data && data.key_terms) || '');
+            openDrawer(`<h3>Summary</h3>
+              <div class="sb-md">${summaryHtml || '<p>No summary.</p>'}</div>
+              ${termsHtml ? `<h4>Key terms</h4><div class="sb-md">${termsHtml}</div>` : ''}`);
+          } catch (err) {
+            openDrawer(`<h3>Summary</h3><div class="sb-code">Network error: ${sb_escapeHtml(err.message)}</div>`);
+          }
+        }));
+
+        /* ---------------- Export ---------------- */
+        exportBtn.addEventListener('click', requireAuthAction(()=>{
+          const url=new URL('{{ url_for("ai.export_chat") }}',window.location.origin);
+          url.searchParams.set('session_id',sessionId);
+          url.searchParams.set('subject',subject);
+          window.location=url.toString();
+        }));
       })();
     </script>
   </body>

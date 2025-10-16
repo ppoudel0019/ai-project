@@ -1,12 +1,12 @@
 import logging
-
+import os, io, datetime, re, json
 from flask import Blueprint, request, jsonify, Response
-import os, io, datetime
+import requests
 import google.generativeai as genai
-import json
 
 ai_bp = Blueprint("ai", __name__)
 
+# ---------- Gemini setup ----------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("Missing GEMINI_API_KEY or GOOGLE_API_KEY in environment.")
@@ -28,20 +28,16 @@ SUBJECTS = {
     'chinese': 'Chinese Language'
 }
 
-
+# ---------- Gemini helpers ----------
 def build_gemini_model(system_prompt: str):
     return genai.GenerativeModel(
         model_name="gemini-2.0-flash-lite",
         system_instruction=system_prompt,
-        generation_config={"temperature": 0.7, "max_output_tokens": 500},
+        generation_config={"temperature": 0.6, "max_output_tokens": 600},
     )
 
-
 def build_quiz_model(system_prompt: str, response_mime_type: str, max_output_tokens: int = 1200, temperature: float = 0.7):
-    cfg = {
-        "temperature": temperature,
-        "max_output_tokens": max_output_tokens,
-    }
+    cfg = {"temperature": temperature, "max_output_tokens": max_output_tokens}
     if response_mime_type:
         cfg["response_mime_type"] = response_mime_type
     return genai.GenerativeModel(
@@ -49,7 +45,6 @@ def build_quiz_model(system_prompt: str, response_mime_type: str, max_output_tok
         system_instruction=system_prompt,
         generation_config=cfg,
     )
-
 
 def to_gemini_history(history):
     converted = []
@@ -64,7 +59,56 @@ def to_gemini_history(history):
         })
     return converted
 
+# ---------- Wolfram helpers (no verdicts) ----------
+def _wolfram_primary_from_pods(j: dict) -> str:
+    try:
+        pods = j["queryresult"]["pods"]
+    except Exception:
+        return ""
+    primary = next((p for p in pods if p.get("primary")), None)
+    candidates = [primary] if primary else pods[:1]
+    for p in candidates or []:
+        for sp in p.get("subpods", []):
+            pt = sp.get("plaintext")
+            if pt:
+                return pt.strip()
+    for p in pods:
+        for sp in p.get("subpods", []):
+            pt = sp.get("plaintext")
+            if pt:
+                return pt.strip()
+    return ""
 
+def wolfram_answer(appid: str, query: str, timeout_result=8, timeout_query=12) -> str:
+    """Ask Wolfram|Alpha: try /v2/result first, then /v2/query (JSON)."""
+    if not appid or not query:
+        return ""
+    # 1) short answer
+    try:
+        r = requests.get(
+            "https://api.wolframalpha.com/v2/result",
+            params={"i": query, "appid": appid},
+            timeout=timeout_result,
+        )
+        if r.status_code == 200 and r.text:
+            return r.text.strip()
+    except requests.RequestException:
+        pass
+    # 2) JSON fallback with reinterpret
+    try:
+        r = requests.get(
+            "https://api.wolframalpha.com/v2/query",
+            params={"input": query, "appid": appid, "output": "json", "reinterpret": "true"},
+            timeout=timeout_query,
+        )
+        if r.ok:
+            j = r.json()
+            return _wolfram_primary_from_pods(j) or ""
+    except requests.RequestException:
+        pass
+    return ""
+
+# ---------- Routes ----------
 @ai_bp.post("/api/ask")
 def ask_question():
     data = request.get_json() or {}
@@ -101,9 +145,16 @@ def ask_question():
         logging.exception("Unable to ask question")
         return jsonify({'error': f'Error generating response: {str(e)}'}), 500
 
-
 @ai_bp.post("/api/verify")
 def api_verify():
+    """
+    Show Gemini sources FIRST, then Wolfram|Alpha answer — NO VERDICT.
+    Sections (Markdown):
+      - Question
+      - Assistant Answer (excerpt)
+      - Gemini Suggested Sources
+      - Wolfram|Alpha Answer
+    """
     data = request.get_json(silent=True) or {}
     session_id = data.get("session_id", "default")
     subject = data.get("subject", "math")
@@ -111,13 +162,18 @@ def api_verify():
         subject = "math"
 
     history = conversations.get(session_id, [])
-    if not history:
-        return jsonify({"reply": "No previous Q&A available to verify."}), 200
+    provided_question = (data.get("question") or "").strip()
+    answer_excerpt = (data.get("answer_excerpt") or "").strip()
+    last_user_q = next((m["content"] for m in reversed(history) if m.get("role") == "user"), "")
+    last_assistant = next((m["content"] for m in reversed(history) if m.get("role") == "assistant"), "")
+    question = provided_question or last_user_q
+    if not answer_excerpt:
+        answer_excerpt = (last_assistant or "")[:400]
 
-    last_user_q = next((m["content"] for m in reversed(history) if m.get("role") == "user"), None)
-    if not last_user_q:
-        return jsonify({"reply": "Couldn't find the last user question to verify."}), 200
+    if not question:
+        return jsonify({"reply": "No question available to verify."}), 200
 
+    # 1) Gemini sources
     try:
         system_prompt = (
             f"You are a study assistant for {SUBJECTS[subject]}. "
@@ -128,15 +184,33 @@ def api_verify():
         prompt = (
             "Provide sources that support a clear, correct answer to this question. "
             "Return a short bulleted list of sources with titles and URLs.\n\n"
-            f"Question: {last_user_q}"
+            f"Question: {question}"
         )
         resp = model.generate_content(prompt)
         sources_text = (getattr(resp, "text", None) or "").strip() or "No sources found."
-        return jsonify({"reply": sources_text}), 200
     except Exception as e:
-        logging.exception("Unable to verify question")
-        return jsonify({"reply": f"Error while verifying: {e}"}), 500
+        logger.exception("Unable to fetch Gemini sources")
+        sources_text = f"_Error while fetching sources: {e}_"
 
+    # 2) Wolfram
+    appid = os.environ.get("WOLFRAM_APPID")
+    if not appid:
+        wa_display = "_No Wolfram AppID configured — set WOLFRAM_APPID._"
+    else:
+        wa_text = wolfram_answer(appid, question) or ""
+        wa_display = f"`{wa_text}`" if wa_text else "_No Wolfram|Alpha result for this query._"
+
+    md = (
+        f"### Question\n"
+        f"`{question}`\n\n"
+        f"### Assistant Answer (excerpt)\n"
+        f"`{(answer_excerpt or '').strip()}`\n\n"
+        f"### Gemini Suggested Sources\n"
+        f"{sources_text}\n\n"
+        f"### Wolfram|Alpha Answer\n"
+        f"{wa_display}\n"
+    )
+    return jsonify({"reply": md}), 200
 
 @ai_bp.post("/reset-conversation")
 def reset_conversation():
@@ -145,9 +219,7 @@ def reset_conversation():
     conversations.pop(session_id, None)
     return jsonify({"ok": True, "cleared_session_id": session_id})
 
-
 def recent_history_md(session_id: str):
-    """Return last ~8 messages as Markdown."""
     hist = conversations.get(session_id, [])
     lines = []
     for m in hist:
@@ -157,7 +229,6 @@ def recent_history_md(session_id: str):
         prefix = "**You:**" if role == "user" else "**Assistant:**"
         lines.append(f"{prefix} {content}")
     return "\n\n".join(lines)
-
 
 @ai_bp.post("/api/summary")
 def summary_chat():
@@ -177,7 +248,6 @@ def summary_chat():
         resp = model.generate_content(
             f"Conversation:\n{text_context}\n\nNow produce:\n- Summary bullets\n- Key terms (term — 1 line)")
         out = (getattr(resp, "text", None) or "").strip()
-        # Split best-effort into two parts
         parts = out.split("Key", 1)
         summary = out if len(parts) == 1 else parts[0].strip()
         key_terms = "" if len(parts) == 1 else "Key" + parts[1]
@@ -185,7 +255,6 @@ def summary_chat():
     except Exception as e:
         logging.exception("Unable to get summary")
         return jsonify({"error": str(e)}), 500
-
 
 @ai_bp.post("/api/quiz")
 def quiz_chat():
@@ -213,14 +282,12 @@ def quiz_chat():
         logging.exception("Unable to post quiz")
         return jsonify({"error": str(e)}), 500
 
-
 @ai_bp.get("/api/export")
 def export_chat():
     session_id = request.args.get("session_id", "default")
     subject = request.args.get("subject", "math")
     history_md = recent_history_md(session_id)
 
-    # quick inline summary to include
     try:
         system_prompt = (
             f"You are a study assistant for {SUBJECTS.get(subject, subject)}. "
@@ -245,7 +312,7 @@ def export_chat():
         }
     )
 
-
+# ---------- JSON quiz endpoints (interactive UI consumes /api/quiz_json) ----------
 @ai_bp.post("/api/quiz_json1")
 def quiz_json1():
     import re, json, logging
@@ -290,7 +357,7 @@ def quiz_json1():
             logging.warning("Failed JSON parse: %s", je)
             return jsonify({
                 "error": "Gemini returned invalid JSON. Try again.",
-                "raw": raw[:1000]  # send a snippet for debugging
+                "raw": raw[:1000]
             }), 500
 
         qs = payload.get("questions", [])
@@ -302,12 +369,6 @@ def quiz_json1():
 
     except Exception as e:
         logging.exception("Unable to generate quiz JSON")
-        msg = str(e)
-        #if "429" in msg or "quota" in msg.lower():
-        #    return jsonify({
-        #        "error": "Gemini API quota exceeded — please wait or enable billing.",
-        #        "detail": msg
-        #    }), 429
         dummy_payload = {
             "questions": [
                 {
@@ -343,9 +404,6 @@ def quiz_json1():
             ]
         }
         return jsonify(dummy_payload)
-
-        #return jsonify({"error": f"quiz generation failed: {msg}"}), 500
-
 
 @ai_bp.post("/api/quiz_json")
 def quiz_json():
@@ -389,13 +447,11 @@ def quiz_json():
 
     def strip_fences(s: str) -> str:
         s = s.strip()
-        # remove leading ```json or ``` and trailing ```
         s = re.sub(r"^\s*```(?:json)?\s*", "", s, flags=re.IGNORECASE)
         s = re.sub(r"\s*```\s*$", "", s)
         return s.strip()
 
     def extract_first_object(s: str):
-        """Return the first top-level balanced {...} region, or None."""
         start = s.find("{")
         if start == -1:
             return None
@@ -408,14 +464,11 @@ def quiz_json():
                 depth -= 1
                 if depth == 0:
                     return s[start:i+1]
-        return None  # never balanced
+        return None
 
     def try_load_json(raw: str):
-        # 1) strip code fences
         cleaned = strip_fences(raw)
-        # 2) if extra prose, try to snip the first balanced object
         obj = extract_first_object(cleaned) or cleaned
-        # 3) last-ditch: remove trailing commas that break JSON (common LLM mistake)
         obj = re.sub(r",(\s*[}\]])", r"\1", obj)
         return json.loads(obj)
 
@@ -440,7 +493,6 @@ def quiz_json():
     )
 
     try:
-        # Force JSON & give enough tokens to avoid truncation
         model = build_quiz_model(
             system_prompt,
             response_mime_type="application/json",
@@ -459,34 +511,26 @@ def quiz_json():
             payload = try_load_json(raw)
         except Exception as je:
             logging.warning("Quiz JSON parse failed: %s\nRaw: %s", je, raw[:1000])
-            # Fallback to dummy so UI still works
             return jsonify({"questions": dummy_quiz(n)["questions"], "note": "fallback_dummy"}), 200
 
         qs = payload.get("questions", [])
         if not isinstance(qs, list) or not qs:
-            # Fallback again if structure wrong
             return jsonify({"questions": dummy_quiz(n)["questions"], "note": "fallback_dummy_empty"}), 200
 
-        # Keep exactly n
         payload["questions"] = qs[:n]
         return jsonify(payload), 200
 
     except Exception as e:
         msg = str(e)
-        # Friendly quota message
         if "429" in msg or "quota" in msg.lower():
             return jsonify({
                 "error": "Gemini API quota exceeded — using dummy quiz.",
                 "questions": dummy_quiz(n)["questions"],
                 "note": "fallback_quota"
             }), 200
-        # Any other fatal -> return dummy and include detail for logs
-        logging.exception("quiz_json fatal: %s", msg)
-        return jsonify({
-            "error": "Quiz generation failed — using dummy quiz.",
-            "questions": dummy_quiz(n)["questions"],
-            "note": "fallback_error",
-            "detail": msg[:400]
-        }), 200
-
-
+    logging.exception("quiz_json fatal")
+    return jsonify({
+        "error": "Quiz generation failed — using dummy quiz.",
+        "questions": dummy_quiz(n)["questions"],
+        "note": "fallback_error"
+    }), 200
